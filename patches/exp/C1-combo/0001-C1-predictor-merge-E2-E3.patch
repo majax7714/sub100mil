@@ -1,0 +1,254 @@
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index f0d4865..49f03a8 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -1,4 +1,5 @@
+ #include "predictor.h"
++#include "bit_head.h"
+ #include <vector>
+ #include <stdlib.h>
+ #include <stdio.h>
+@@ -280,6 +281,31 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     half_scratch_.resize(vocab_size_);
+     transformer_probs_.resize(vocab_size_);
+     print_transformer_loss_ = true;
++    {  // [sub100mil E2] runtime configuration (encoder and decoder must match)
++      auto geti = [](const char* n, int d) {
++        const char* v = getenv(n); return v && *v ? atoi(v) : d; };
++      auto getf = [](const char* n, float d) {
++        const char* v = getenv(n); return v && *v ? strtof(v, nullptr) : d; };
++      e2_cfg_.fwk = geti("E2_FWK", 0);
++      e2_cfg_.logit = geti("E2_LOGIT", 0);
++      e2_cfg_.k0 = getf("E2_K0", e2_cfg_.k0);
++      e2_cfg_.kf = getf("E2_KF", e2_cfg_.kf);
++      e2_cfg_.tau = getf("E2_TAU", e2_cfg_.tau);
++      e2_cfg_.a0 = getf("E2_A0", e2_cfg_.a0);
++      e2_cfg_.af = getf("E2_AF", e2_cfg_.af);
++      e2_cfg_.atau = getf("E2_ATAU", e2_cfg_.atau);
++      e2_final_ = geti("E2_FINAL", 1) != 0;
++      e2_on_ = e2_cfg_.on();
++      if (e2_on_) {
++        transformer_->e2_set(e2_cfg_);
++        e2_half_.resize(vocab_size_);
++        e2_row_.assign(vocab_size_, 1.0f);
++        fprintf(stderr, "E2: fwk=%d logit=%d k0=%g kf=%g tau=%g a0=%g af=%g "
++            "atau=%g final=%d\n", e2_cfg_.fwk, e2_cfg_.logit, e2_cfg_.k0,
++            e2_cfg_.kf, e2_cfg_.tau, e2_cfg_.a0, e2_cfg_.af, e2_cfg_.atau,
++            (int)e2_final_);
++      }
++    }
+     if (!options.save_transformer_probs.empty()) {
+       transformer_probs_writer_.reset(
+           new HalfFileWriter(options.save_transformer_probs));
+@@ -296,6 +322,12 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     AddPPMD();
+     return;
+   }
++  // [sub100mil E3] BITLSTM head: configuration from BITL_* env, transformer
++  // state (192-d normalised final hidden) as its per-byte side input.
++  bit_head::Init();
++  bit_head::SetAux(transformer_ ? transformer_->last_hidden() : nullptr, 192);
++  bitl_on_ = bit_head::Enabled();
++  bitl_mode_ = bit_head::Mode();
+   AddBracket();
+   // With load_transformer_probs the ppmd is not run: its mixer input is a
+   // constant and the transformer's distributions come from the file.
+@@ -324,6 +356,7 @@ unsigned long long Predictor::GetNumModels() {
+ #if defined(E1CONF) && defined(E1_GATE)
+   num += E1_GATE == 2 ? 20 : E1_GATE == 3 ? 28 : E1_GATE == 4 ? 80 : 16;
+ #endif
++  if (e2_on_) num += 1;  // [sub100mil E2] correction-head byte slot
+   return num;
+ }
+ 
+@@ -432,6 +465,8 @@ void Predictor::AddMixers() {
+   byte_mixer_.emplace(1, manager_.bit_context_, vocab_,
+       vocab_size, transformer_ ? nullptr :
+       new Lstm(vocab_size, vocab_size, 200, 1, 128, 0.03, 10));
++  if (e2_on_) e2_mixer_.emplace(1, manager_.bit_context_, vocab_, vocab_size,
++      nullptr);
+ 
+   for (int i = 0; i < 2; ++i) {
+     layers_.emplace_back(sigmoid_,
+@@ -473,7 +508,9 @@ void Predictor::AddMixers() {
+   AddMixer(0, e1_mx_, E1_MIXNEW_LR);
+ #endif
+ 
+-  input_size = mixer_0_.size() + auxiliary_size_;
++  input_size = mixer_0_.size() + auxiliary_size_ + (e2_on_ && e2_final_ ? 1 : 0);
++  // [sub100mil E3] mode 1: the head's logit is one more final-mixer input
++  if (bitl_on_ && bitl_mode_ == 1) ++input_size;
+   layers_[1].SetNumModels(input_size);
+ 
+ #ifdef E1_MIX1
+@@ -582,6 +619,11 @@ float Predictor::Predict() {
+ #endif
+   }
+ #endif
++  unsigned int e2_index = 0;
++  if (e2_on_) {
++    e2_index = input_index;
++    layers_[0].SetInput(input_index++, e2_output_);
++  }
+ 
+   float auxiliary_average = Sigmoid::Logistic(layers_[0].Inputs()[fxcm_model_index]) + Sigmoid::Logistic(layers_[0].Inputs()[byte_mixer_index]);
+   auxiliary_average /= auxiliary_size_;
+@@ -597,8 +639,21 @@ float Predictor::Predict() {
+   }
+   layers_[1].SetStretchedInput(mixer_0_.size(), layers_[0].Inputs()[fxcm_model_index]);
+   layers_[1].SetStretchedInput(mixer_0_.size() + 1, layers_[0].Inputs()[byte_mixer_index]);
++  // [sub100mil C1] the E2 column (if any) comes right after fxcm and the byte
++  // mixer; the BITLSTM sees every stage-1 column, E2's included.
++  unsigned int c1_n_stage1 = mixer_0_.size() + auxiliary_size_;
++  if (e2_on_ && e2_final_)
++    layers_[1].SetStretchedInput(c1_n_stage1++, layers_[0].Inputs()[e2_index]);
++  bitl_stage1_ = &layers_[1].Inputs()[0];
++  bitl_n_stage1_ = (int)c1_n_stage1;
++  bitl_override_ = (byte_mixer_override >= 0) ? 1 : 0;
++  if (bitl_on_ && bitl_mode_ == 1) {
++    layers_[1].SetStretchedInput(c1_n_stage1,
++        bit_head::PredictInput(bitl_stage1_, bitl_n_stage1_, bitl_override_));
++  }
+ 
+-  p = Sigmoid::Logistic(mixer_1_[0].Mix());
++  bitl_m1raw_ = mixer_1_[0].Mix();
++  p = Sigmoid::Logistic(bitl_m1raw_);
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
+ #ifdef E1_APM
+@@ -669,6 +724,9 @@ void Predictor::TransformerByteUpdate() {
+     Fail("transformer: byte 0x%02x is not in the vocabulary",
+         manager_.bit_context_);
+   }
++  // [sub100mil E2] train on the byte just coded, iff the head predicted it
++  if (e2_pending_) transformer_->e2_update((uint8_t)token);
++  e2_pending_ = false;
+   memmove(separator_window_, separator_window_ + 1,
+       sizeof(separator_window_) - 1);
+   separator_window_[sizeof(separator_window_) - 1] = (unsigned char)token;
+@@ -692,6 +750,14 @@ void Predictor::TransformerByteUpdate() {
+     FloatsToHalves(transformer_probs_.data(), half_scratch_.data(),
+         vocab_size_);
+     HalvesToFloats(half_scratch_.data(), probs_scratch_.data(), vocab_size_);
++    if (e2_on_) {  // same float16 rounding and floor as the static row
++      FloatsToHalves(transformer_->e2_probs(), e2_half_.data(), vocab_size_);
++      HalvesToFloats(e2_half_.data(), e2_row_.data(), vocab_size_);
++      for (unsigned int i = 0; i < vocab_size_; ++i) {
++        if (!(e2_row_[i] >= 1e-6f)) e2_row_[i] = 1e-6f;
++      }
++      e2_pending_ = true;
++    }
+   }
+   if (transformer_probs_writer_) {
+     transformer_probs_writer_->WriteHalves(half_scratch_.data(), vocab_size_);
+@@ -699,6 +765,9 @@ void Predictor::TransformerByteUpdate() {
+   for (unsigned int i = 0; i < vocab_size_; ++i) {
+     if (!(probs_scratch_[i] >= 1e-6f)) probs_scratch_[i] = 1e-6f;
+   }
++  // [sub100mil E2] at piece starts the head row is the static (ppmd) row
++  if (e2_on_ && !e2_pending_) e2_row_ = probs_scratch_;
++  if (e2_mixer_) e2_mixer_->SetProbs(e2_row_.data());
+   // With --transformer-only there is no byte mixer: probs_scratch_ is the
+   // final destination of the distribution (and what the loss is measured on).
+   if (byte_mixer_) byte_mixer_->SetProbs(probs_scratch_.data());
+@@ -777,12 +846,26 @@ void Predictor::AccumulateTransformerLoss() {
+   double ratio = sum > 0 ? prob / sum : 0;
+   if (!(ratio > 1e-38)) ratio = 1e-38;  // avoid inf from zero probabilities
+   transformer_loss_sum_ -= std::log(ratio);
++  if (e2_on_) {  // [sub100mil E2] the head's own loss and a 50/50 mix proxy
++    double s2 = 0, p2 = 0;
++    for (unsigned int i = 0; i < vocab_size_; ++i) s2 += e2_row_[i];
++    int index = byte_to_index_[manager_.bit_context_];
++    if (index >= 0) p2 = e2_row_[index];
++    double r2 = s2 > 0 ? p2 / s2 : 0;
++    if (!(r2 > 1e-38)) r2 = 1e-38;
++    e2_loss_sum_ -= std::log(r2);
++    e2_mix_loss_sum_ -= std::log(0.5 * ratio + 0.5 * r2);
++  }
+   ++transformer_tokens_;
+   if (transformer_tokens_ % 1000000 == 0 ||
+       transformer_tokens_ == num_input_bytes_) {
+     fprintf(stderr, "\r%*s\r", 70, "");  // clear the progress line
+     printf("transformer loss: %.6f nats/token over %llu tokens\n",
+         transformer_loss_sum_ / transformer_tokens_, transformer_tokens_);
++    if (e2_on_)
++      printf("E2 head loss: %.6f nats/token, 50/50 mix %.6f\n",
++          e2_loss_sum_ / transformer_tokens_,
++          e2_mix_loss_sum_ / transformer_tokens_);
+     fflush(stdout);
+   }
+ }
+@@ -826,7 +909,7 @@ void Predictor::Perceive(int bit) {
+ 
+   { PROF(PPMD); if (byte_model_) byte_model_->Perceive(bit); }
+ 
+-  { PROF(BMIX); byte_mixer_->Perceive(bit); }
++  { PROF(BMIX); byte_mixer_->Perceive(bit); if (e2_mixer_) e2_mixer_->Perceive(bit); }
+ 
+   {
+   PROF(MIX);
+@@ -842,6 +925,7 @@ void Predictor::Perceive(int bit) {
+ #ifdef E1_APM
+   e1_apm_->Update(bit, E1_APM_RATE);
+ #endif
++  if (bitl_on_ && bitl_mode_ == 1) bit_head::ObserveInput(bit);
+ 
+   bool byte_update = false;
+   if (manager_.bit_context_ >= 128) byte_update = true;
+@@ -893,7 +977,8 @@ void Predictor::Perceive(int bit) {
+       LoadTransformerProbs();
+     }
+   }
+-  { PROF(BMIX); byte_mixer_output = byte_mixer_->Predict()[0]; }
++  { PROF(BMIX); byte_mixer_output = byte_mixer_->Predict()[0];
++    if (e2_mixer_) e2_output_ = e2_mixer_->Predict()[0]; }
+   lstmpr=Discretize(byte_mixer_output);
+   lstmex=byte_mixer_->ex;
+   { PROF(FXCM); fxcm_model_->Perceive(bit); }
+diff --git a/src/predictor.h b/src/predictor.h
+index fc1f620..cdd15d0 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -172,6 +172,14 @@ class Predictor {
+   void Perceive(int bit);
+   void Pretrain(int bit);
+ 
++  // [sub100mil E3] BITLSTM hand-over (valid between Predict() and Perceive()).
++  bool BitlPost() const { return bitl_on_ && bitl_mode_ == 0 &&
++                                 !ppmd_only_ && !transformer_only_; }
++  const float* bitl_stage1_ = nullptr;
++  int bitl_n_stage1_ = 0;
++  float bitl_m1raw_ = 0.0f;
++  int bitl_override_ = 0;
++
+  private:
+   unsigned long long GetNumModels();
+   void AddMixer(int layer, const unsigned long long& context,
+@@ -211,6 +219,8 @@ class Predictor {
+   std::vector<bool> vocab_;
+   std::optional<FXCM> fxcm_model_;
+   bool ppmd_only_ = false;
++  bool bitl_on_ = false;
++  int bitl_mode_ = 0;
+   bool transformer_only_ = false;
+   unsigned int vocab_size_ = 0;
+   std::vector<int> vocab_bytes_;  // byte values in the vocabulary, ascending
+@@ -247,6 +257,18 @@ class Predictor {
+   int e1_cb_ = 0;                  // per-bit bucket (16)
+   std::optional<E1Apm> e1_apm_;
+ #endif
++
++  // [sub100mil E2] online correction head (cpp_infer/src/opt/model_opt.h
++  // E2Config), configured from E2_* environment variables. Its distribution
++  // goes through its own byte slot into layer 0 (and, with E2_FINAL, into the
++  // final mixer).
++  fx2::opt::E2Config e2_cfg_;
++  bool e2_on_ = false, e2_final_ = true, e2_pending_ = false;
++  std::optional<ByteMixer> e2_mixer_;
++  std::vector<uint16_t> e2_half_;
++  std::vector<float> e2_row_;
++  float e2_output_ = 0.5f;
++  double e2_loss_sum_ = 0, e2_mix_loss_sum_ = 0;
+ };
+ 
+ #endif

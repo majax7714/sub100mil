@@ -1,0 +1,64 @@
+diff --git a/src/models/fxcmv1.cpp b/src/models/fxcmv1.cpp
+index fc45bba..cbaa011 100644
+--- a/src/models/fxcmv1.cpp
++++ b/src/models/fxcmv1.cpp
+@@ -101,8 +101,12 @@ void AddPrediction(int x) {
+     model_predictions[prediction_index++] = x * conversion_factor;
+ }
+ 
++// [sub100mil E9] how many outputs fxcm filled for the current bit; the last
++// one filled is fxcm's own final prediction (its APM average).
++unsigned int e9_last_filled = 0;
+ void ResetPredictions() {
+     assert(prediction_index >= 0 && prediction_index <= num_models);
++    e9_last_filled = prediction_index;
+     prediction_index = 0;
+ }
+ 
+@@ -4829,6 +4833,19 @@ unsigned int FXCM::NumOutputs() {
+     return fxcmv1::model_predictions.size();
+ }
+ 
++// [sub100mil E9] index (within fxcm's outputs) of fxcm's final prediction.
++// The record used the last slot (num_models - 1), but fxcm fills only 429 of
++// its 431 outputs, so that slot is the constant 0.5. E9_FXCM_FINAL=0 restores
++// the record's behaviour (encoder and decoder must agree).
++static const bool e9_on = [] {
++    const char* v = getenv("E9_FXCM_FINAL");
++    return !(v && *v && atoi(v) == 0);
++}();
++unsigned int FXCM::FinalIndex() const {
++    if (e9_on && fxcmv1::e9_last_filled) return fxcmv1::e9_last_filled - 1;
++    return fxcmv1::model_predictions.size() - 1;
++}
++
+ void FXCM::Perceive(int bit) {
+     fxcmv1::x.y = bit;
+     predictor_->update();
+diff --git a/src/models/fxcmv1.h b/src/models/fxcmv1.h
+index d192708..4c8f54b 100644
+--- a/src/models/fxcmv1.h
++++ b/src/models/fxcmv1.h
+@@ -20,6 +20,7 @@ class FXCM : public Model {
+   FXCM();
+   const std::valarray<float>& Predict() const;
+   unsigned int NumOutputs();
++  unsigned int FinalIndex() const;  // [sub100mil E9]
+   void Perceive(int bit);
+   void ByteUpdate() {};
+ 
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index c5762d2..8438673 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -493,7 +493,9 @@ float Predictor::Predict() {
+     layers_[0].SetInput(input_index, fxcm_model_outputs[j]);
+     ++input_index;
+   }
+-  auto fxcm_model_index = input_index - 1;
++  // [sub100mil E9] fxcm's real final prediction, not its (constant 0.5) last slot
++  auto fxcm_model_index = input_index - fxcm_model_outputs.size() +
++      fxcm_model_->FinalIndex();
+   {
+   PROF(CMO);
+ 
