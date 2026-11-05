@@ -97,3 +97,11 @@ See docs/LANDSCAPE.md §6 for why these were chosen.
 ```sh
 scripts/fetch_refs.sh
 ```
+
+## slot.sh
+
+Limits how many heavy (multi-GB RAM) runs execute at once across parallel agents. The default is 3 slots.
+```sh
+scripts/slot.sh scripts/bench.sh --method ... --slice ... --comp ... --decomp ...
+```
+Timings taken while other slots are busy are contended, so don't use them for speed claims. Clean timing needs an idle box.
