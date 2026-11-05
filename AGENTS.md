@@ -101,7 +101,7 @@ data/           corpus and slices (gitignored)
 
 - Dev box: 12 cores, 30 GiB RAM, Fedora 43. Our dev box is **not** the prize reference
   machine. Check docs/RULES.md for the time and memory limits and how timing is normalized.
-- Toolchain as of 2026-11-04: `gcc`, `g++`, `cmake` and `python3`
+- Toolchain as of 2026-11-04: `gcc`, `g++`, `cmake`, `python3` and `perf` (user-space profiling works without sudo)
   are installed (g++ 15.3.1, cmake 3.31). The dev CPU has AVX-512 but a reference machine does not,
   so always build with `-march=x86-64-v3`, never `-march=native`.
 - Benchmark every run through `scripts/bench.sh` (see scripts/README.md).
