@@ -12,6 +12,18 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: E1 transformer confidence as a context is a small gain (keep)
+- **Type:** model addition
+- **Did:** Tried 8 variants of feeding the transformer's confidence to the mixers and APMs. Patches in `patches/exp/E1-confidence/`
+  (commits ef7ca4a, c464b49, bb671b9).
+- **Numbers:** Best: **gate3**. Each of the 23 layer-0 mixers gets 28 extra inputs, which are copies of the transformer's stretched bit probability,
+  each copy nonzero only in its confidence bucket (P(top byte | bits so far), top-1 probability, entropy, top-1/top-2 margin).
+  1M −52 B; **10M 1,264,272 B, −410 B (−0.032%)**. Cost about 0.55 h on the reference machine, ≤26 MB RAM.
+  Failures: confidence-selected mixer weight sets (+573 on 1M) and an extra APM (+186).
+- **Learned:** New mixer contexts that start from zero weights lose, because the record's mixers learn slowly. Zero-initialized
+  *additive* corrections (gating) win because nothing is lost while they learn.
+- **Next:** Confirm on 100M or the full file. Try confidence-gating fxcm and PPMd too, and warm-starting new mixer contexts.
+
 ## 2026-11-05: E3 BITLSTM port (online-only) is a small gain
 - **Type:** model addition
 - **Did:** Ported neif's BITLSTM onto the record as an online-only logit correction right before the coder (neif's placement), with
