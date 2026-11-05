@@ -12,6 +12,22 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: E2 online correction head is the best result so far (−0.17%)
+- **Type:** model addition (transformer-side, online learning)
+- **Did:** Built 5 variants of an online correction on the frozen transformer, including ex-girlfriend's fast-weight head (pinned at e923fae via
+  fetch_refs.sh). Patches in `patches/exp/E2-correction-head/` (commits cadd1b0, 568f489, 1901d62, 5a8ee71).
+- **Numbers:**
+  - **logit head** (a zero-initialized 205×193 matrix on the final hidden state, one step per token, its distribution fed as an extra mixer
+    input): 1M −212, **10M 1,262,559 B, −2,123 B (−0.168%)**. About 5 µs per token, **about 1.0 h** at full scale, about 0.3 MB.
+  - FW1 (fast weights on the last MLP block): 10M −2,165 B, but 2.6 h.
+  - FW4 (ex-girlfriend's 4 blocks): −297 on 1M, but about 9.7 h, which **doesn't fit** the 7.8 h headroom.
+- **Learned:**
+  - Transformer-side corrections are about 5× bigger than the CM-side gains (E1, E3).
+  - The gain did *not* grow with length: −0.21% on 1M and −0.17% on 10M. The naive full-scale extrapolation of about −165 KB is speculative and probably high.
+  - ex-girlfriend's learning rates, tuned on neif, are too high for fx2-T.
+  - Variants are selected with `E2_*` environment variables, which must match between compress and decompress.
+- **Next:** Confirm on 100M. Test whether E1, E2, E3 and E9 add up. Try dynamic evaluation (online updates to the transformer's own weights).
+
 ## 2026-11-05: E1 transformer confidence as a context is a small gain (keep)
 - **Type:** model addition
 - **Did:** Tried 8 variants of feeding the transformer's confidence to the mixers and APMs. Patches in `patches/exp/E1-confidence/`
