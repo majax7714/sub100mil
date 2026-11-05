@@ -45,10 +45,12 @@ Per bit (from `ByteModel::Predict` of the byte mixer, after each bit):
 | apm1 | `E1_APM=1` | (b) extra interpolating APM after the SSE, ctx `e1_ctx × bpos`, rate 0.02, (p_sse+p_apm)/2 | 126,659 | **+186** | | |
 | gate1 | `E1_GATE=1` | 16 extra layer-0 inputs: the transformer's stretch(p) copied into the input selected by `cb`, others 0 | 126,455 | −18 | | |
 | gate2 | `E1_GATE=2` | gate1 + 4 inputs gated by `b_top` (20 extra) | 126,438 | −35 | | |
-| **gate3** | `E1_GATE=3` | gate2 + 4 gated by entropy + 4 gated by margin (28 extra) | **126,421** | **−52 (−0.041%)** | GATE3_10M | GATE3_10M_D |
+| **gate3** | `E1_GATE=3` | gate2 + 4 gated by entropy + 4 gated by margin (28 extra) | **126,421** | **−52 (−0.041%)** | **1,264,272** | **−410 (−0.032%)** |
 | gate4 | `E1_GATE=4` | 16 `cb`-gated + 64 `e1_ctx`-gated (80 extra) | 126,452 | −21 | | |
 
 All rows round-trip verified (`cmp`) through `scripts/slot.sh scripts/bench.sh`; ledger method names `fx2T+E1-<variant>`.
+Only gate3 was run on 10M (a gate2 10M run was cancelled to free a shared slot). The 10M gain (−410 B, −0.032%)
+is about the same relative size as on 1M (−0.041%), so it isn't just warm-up. It's the same order as E3's BITLSTM (−326 on 10M).
 Timings in the ledger are contended (other agents on the box) and are not speed claims.
 
 ## What we learned
@@ -94,4 +96,5 @@ patches/exp/E1-confidence/run.sh gate3 enwik9_1M "E1_GATE=3 ..."  # needs the re
 - Initialize new mixer contexts from a shared set instead of zero, then retry weight-set selection (mix1); this mostly
   matters on slices, but the full run also has many cold contexts.
 - A slow, learned blend for the APM (b) instead of 50/50.
-- The slice gain is from a cold start; the full-run gain could be smaller or larger. Confirm on enwik9_100M or full.
+- Scaling from 10M is uncertain: if the relative gain holds (−0.03%), full enwik9 would gain roughly −30 KB on a
+  ~97 MB archive (ESTIMATE). Confirm on enwik9_100M or full before relying on it.
