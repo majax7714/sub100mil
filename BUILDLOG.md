@@ -12,6 +12,20 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: E3 BITLSTM port (online-only) is a small gain
+- **Type:** model addition
+- **Did:** Ported neif's BITLSTM onto the record as an online-only logit correction right before the coder (neif's placement), with
+  inputs from all 25 final-mixer inputs plus a 32-d sketch of the transformer's hidden state. Rewrote the forward/backward kernels
+  (5× faster at 32 cells; only the summation order changes). Patches in `patches/exp/E3-bitlstm/` (commits 796d3e8, 0768a26).
+- **Numbers:** 1M: −12 B at best (fast16). 10M: agg16 1,264,356 B, **−326 B (−0.026%)**. The gain per MiB rises from 14 to about 72–89 B by 5 MiB
+  and hasn't levelled off. Feeding it as a mixer input instead is worse (+4 B on 1M), and 32 cells are no better than 16. Cost about 6.9 µs per coded byte,
+  about 1.4 h on the reference machine (about 18% of our headroom), +1.4 MB RAM.
+- **Learned:**
+  - The online-only gain is small. neif's value came mostly from **replay-training on its own run**, which is CPU-only and so allowed under our plan.
+  - The license combination (neif GPL-3.0-only + record GPL-3.0) should be fine, but the result could then only be distributed under exactly GPL-3.0. Flagged, not resolved.
+  - Settings come from `BITL_*` environment variables, which must match between compress and decompress, and must be hard-coded for a submission.
+- **Next:** Either CPU replay-training of the head on a trace of our run, or the online head on the 100M slice to see where it levels off.
+
 ## 2026-11-05: A1 retrieval model is a no-go (measured); per-byte cost tool
 - **Type:** architectural (evidence only)
 - **Did:** Built a per-byte cost instrument for the record (`patches/tools/per-byte-cost/`) and measured the match/retrieval
