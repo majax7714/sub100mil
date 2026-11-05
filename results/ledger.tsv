@@ -1,1 +1,7 @@
 date	commit	method	slice	input_bytes	output_bytes	bpb	comp_s	decomp_s	peak_rss_mb	threads	roundtrip_ok	notes
+2026-11-04	193fdc0	xz -9e -T1	enwik9_10M	10000000	2720256	2.1762	3.4			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8
+2026-11-04	193fdc0	zstd -19 --long=27 -T1	enwik9_10M	10000000	2793624	2.2349	3.0			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8
+2026-11-04	193fdc0	bzip2 -9	enwik9_10M	10000000	2916026	2.3328	0.4			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8
+2026-11-04	193fdc0	xz -9e -T1	enwik9_100M	100000000	24831648	1.9865	61.9			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8
+2026-11-04	193fdc0	zstd -19 --long=27 -T1	enwik9_100M	100000000	26395074	2.1116	52.2			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8
+2026-11-04	193fdc0	bzip2 -9	enwik9_100M	100000000	29008758	2.3207	4.6			1	not_checked	baseline general-purpose compressor; xz 5.8.1 zstd 1.5.7 bzip2 1.0.8

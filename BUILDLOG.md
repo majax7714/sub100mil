@@ -16,7 +16,8 @@ Newest entries first. One entry per session or experiment. Format:
 - **Did:** Created repo scaffolding: AGENTS.md/CLAUDE.md rules, build log, attic, results ledger,
   .gitignore for data/. Fetched enwik9, derived enwik8 and working slices (`scripts/fetch_data.sh`).
   Researched the official prize rules and compute limits into `docs/RULES.md`.
-- **Numbers:** pending (baseline general-purpose compressors on slices)
+- **Numbers:** Baselines, single-thread, round-trip not checked: 10M slice xz -9e 2,720,256 (2.18 bpb), zstd -19 2,793,624, bzip2 2,916,026. 100M (enwik8): xz 24,831,648 (1.99 bpb), zstd 26,395,074, bzip2 29,008,758. 6 ledger rows.
+- **Rules:** see docs/RULES.md. 1 core, about 50 h per program, 10 GB RAM, 100 GB disk, no GPU at runtime, compressor size counts toward S. Record L = 100,424,672 (fx2-cmix-transformer, Sep 2026). Prize needs S < 99,420,425. Benchmark entries under 100M already appear (unverified).
 - **Learned:** Dev box has 12 cores / 30 GiB. No C++ toolchain installed yet.
 - **Next:** Install g++/cmake. Set up a benchmark harness (compress → decompress → cmp → ledger row).
   Get a reference CM baseline on slices.
