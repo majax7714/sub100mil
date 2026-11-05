@@ -11,6 +11,22 @@ reference machine (target ≤45 h), AVX2 at most (no AVX-512), no network and no
 **The compressor's size counts toward S**, and any embedded weights or dictionaries count
 too. Record L = 100,424,672 bytes (Sep 2026). A prize needs S < 99,420,425.
 
+## Strategy stance
+
+**We're chasing the compression goal, not improving the current record holder.**
+- **Milestones:** first sub-100M, then about 95M.
+- **Tuning existing code is allowed.** Forking the best open codebase and tuning it is a legitimate tool, and it's
+  probably how we reach sub-100M first.
+- **Big jumps need architectural change.** A jump like 100M → 95M most likely needs one: a new predictor
+  class, a different way of spending the compute budget, or a new representation of the data. Tuning won't
+  get there.
+- **Keep at least one architectural bet in flight.** Don't spend all effort on tuning someone else's design.
+- **Classify every experiment** as tuning, preprocessing, model addition or architectural in its build log
+  entry, so we can see where our gains come from.
+- See [`docs/LANDSCAPE.md`](docs/LANDSCAPE.md) for the survey of prior entries and the candidate directions.
+- **Third-party code** is fetched by script into gitignored `third_party/`, pinned to exact commits, and never
+  vendored into the repo. Respect its license (most of the cmix lineage is GPL).
+
 This file is the single source of project rules for any agent (Claude, Codex, etc.).
 `CLAUDE.md` imports it.
 
