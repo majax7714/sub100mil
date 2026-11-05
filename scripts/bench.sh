@@ -137,7 +137,7 @@ kb2mb() { awk -v k="$1" 'BEGIN{printf "%.1f", k/1024}'; }
 PEAK_MB="$(kb2mb "$PEAK_KB")"
 
 COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if [[ "$COMMIT" != unknown && -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+if [[ "$COMMIT" != unknown && -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no -- . ':(exclude)results/ledger.tsv' 2>/dev/null)" ]]; then
   COMMIT="$COMMIT+dirty"
 fi
 

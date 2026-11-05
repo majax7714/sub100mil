@@ -39,4 +39,4 @@ So slice gains on *transformer-side* mechanisms are roughly representative, but 
 | A1 | **Architectural bet:** a stronger long-range match/retrieval model over the file itself (templates, repeated phrases), fed to the mixers | architectural | TBD | Deterministic, CPU-only, no training. enwik9 is highly repetitive | needs design |
 
 ## Tooling debt
-- `bench.sh` marks runs `+dirty` when only `results/ledger.tsv` has uncommitted rows. It should ignore the ledger.
+- ~~`bench.sh` marked runs `+dirty` for uncommitted ledger rows~~ (fixed 2026-11-05).
