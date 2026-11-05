@@ -1,0 +1,474 @@
+diff --git a/cpp_infer/src/opt/arena_build.cpp b/cpp_infer/src/opt/arena_build.cpp
+index c1e3014..03d4936 100644
+--- a/cpp_infer/src/opt/arena_build.cpp
++++ b/cpp_infer/src/opt/arena_build.cpp
+@@ -202,6 +202,17 @@ void OptModel::load(const char* weights_path) {
+   if (ki != 9 || vi != 3) die("layer pattern mismatch");
+ 
+   unembed = qsite("unembedding", V, D, true);
++  {  // [sub100mil E2] float copy of the unembedding for the E2 backward
++     // (as ex-girlfriend arena_build.cpp PORT_FW)
++    const WTensor& uq = wf.get("unembedding.weight.q", DT_I8, {V, D});
++    const WTensor& us = wf.get("unembedding.weight.scale", DT_BF16, {V});
++    unembed_f32.assign(size_t(V) * D, 0.0f);
++    for (int o = 0; o < V; o++) {
++      const float sc = bf16_to_f32(us.bf16_bits()[o]);
++      for (int i = 0; i < D; i++)
++        unembed_f32[size_t(o) * D + i] = float(uq.i8()[size_t(o) * D + i]) * sc;
++    }
++  }
+   stream_bytes = round64(off);
+ 
+   // ---- non-stream data: tail slack gap, then the normed embedding table ----
+diff --git a/cpp_infer/src/opt/arena_build.h b/cpp_infer/src/opt/arena_build.h
+index 581fee1..0ad32c5 100644
+--- a/cpp_infer/src/opt/arena_build.h
++++ b/cpp_infer/src/opt/arena_build.h
+@@ -83,6 +83,7 @@ struct OptModel {
+   VanArenas van[3];
+   MlpArenas mlp[NL];
+   QSite unembed;         // 205x192 (rows_padded 208), biased
++  std::vector<float> unembed_f32;  // [sub100mil E2] float copy [205][192]
+ 
+   int layer2kimi[NL] = {};
+   int layer2van[NL] = {};
+diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
+index 85773ba..c619d3d 100644
+--- a/cpp_infer/src/opt/model_opt.cpp
++++ b/cpp_infer/src/opt/model_opt.cpp
+@@ -267,6 +267,171 @@ struct TransformerOptImpl {
+   alignas(64) float probs208[208] = {};
+   alignas(32) float sfall[32] = {}, cfall[32] = {};  // rope fallback row
+ 
++  // ---- [sub100mil E2] online correction head (see model_opt.h E2Config) ----
++  E2Config e2;
++  static constexpr int FWMAX = 4;
++  std::vector<float> fw_dW;          // [fwk][DMLP][D], zero init
++  std::vector<float> lg_A;           // [D+1][208] logit head (row D = bias)
++  int fw_nnz[FWMAX] = {};
++  alignas(64) uint16_t fw_idx[FWMAX][DMLP] = {};
++  alignas(64) float fw_h[FWMAX][DMLP] = {};
++  alignas(64) float fw_v[FWMAX][DMLP] = {};   // EMA of h_i^2
++  alignas(64) float fw_sh[FWMAX][DMLP] = {};
++  alignas(64) float fw_dx[D] = {}, fw_x2[D] = {}, fw_xn[D] = {};
++  float fw_denom = 0.0f;
++  alignas(64) uint8_t fw_q[256] = {};
++  alignas(64) float raw_logits[208] = {};
++  alignas(64) float fw_logits[208] = {}, fw_probs208[208] = {};
++  alignas(64) float fw_lc[208] = {};
++  uint64_t fw_t = 0;
++
++  void e2_set(const E2Config& c) {
++    e2 = c;
++    if (e2.fwk < 0) e2.fwk = 0;
++    if (e2.fwk > FWMAX) e2.fwk = FWMAX;
++    fw_dW.assign(size_t(e2.fwk) * DMLP * D, 0.0f);
++    if (e2.logit) lg_A.assign(size_t(D + 1) * 208, 0.0f);
++  }
++
++  // FW forward for block b (b = 0 runs first and clears fw_dx): h = q768 * s
++  // over the nonzero relu^2 codes, dx += dW_b[:, i] h_i (ex-girlfriend
++  // fw_apply). Fixed op order.
++  void fw_apply(int b, float s) {
++    int nnz = 0;
++    uint16_t* const idx = fw_idx[b];
++    float* const h = fw_h[b];
++    for (int i = 0; i < DMLP; i++) {
++      if (q768[i] == 0) continue;
++      idx[nnz] = uint16_t(i);
++      h[nnz] = float(q768[i]) * s;
++      nnz++;
++    }
++    fw_nnz[b] = nnz;
++    if (b == 0)
++      for (int j = 0; j < D; j++) fw_dx[j] = 0.0f;
++    const float* const dWb = fw_dW.data() + size_t(b) * DMLP * D;
++    for (int k = 0; k < nnz; k++) {
++      const float* col = dWb + size_t(idx[k]) * D;
++      const float hv = h[k];
++      for (int j = 0; j < D; j++) fw_dx[j] += col[j] * hv;
++    }
++  }
++
++  // second head into its own buffers; the static head's outputs stay untouched
++  void e2_head() {
++    if (e2.fwk > 0) {
++      for (int i = 0; i < D; i++) fw_x2[i] = x[i] + fw_dx[i];
++      rms_norm_quant192(fw_x2, fw_xn, M.unembed.s_act, fw_q);
++      float sx = 0.0f, sn = 0.0f;
++      for (int i = 0; i < D; i++) {
++        sx += fw_x2[i] * fw_x2[i];
++        sn += fw_xn[i] * fw_xn[i];
++      }
++      fw_denom = sx > 0.0f ? std::sqrt(sn / sx) : 0.0f;
++      qgemv_f32(M.unembed.m, fw_q, fw_logits);  // rows_padded 208
++    } else {
++      std::memcpy(fw_xn, xn, sizeof(float) * D);
++      std::memcpy(fw_logits, raw_logits, sizeof(float) * 208);
++    }
++    if (e2.logit) {
++      const float* A = lg_A.data();
++      for (int i = 0; i < D; i++) {
++        const float a = fw_xn[i];
++        const float* row = A + size_t(i) * 208;
++        for (int o = 0; o < 208; o++) fw_logits[o] += row[o] * a;
++      }
++      const float* bias = A + size_t(D) * 208;
++      for (int o = 0; o < 208; o++) fw_logits[o] += bias[o];
++    }
++    head_softcap_softmax(fw_logits, fw_probs208);  // fw_logits -> 15 tanh(l/15)
++    std::memcpy(fw_lc, fw_logits, sizeof(float) * 208);
++  }
++
++  static float hsum8(__m256 v) {  // fixed order
++    alignas(32) float t[8];
++    _mm256_store_ps(t, v);
++    return ((t[0] + t[1]) + (t[2] + t[3])) + ((t[4] + t[5]) + (t[6] + t[7]));
++  }
++
++  void e2_update(uint8_t y) {
++    alignas(64) float dl[208];
++    for (int o = 0; o < V; o++) {
++      const float d = fw_probs208[o] - (o == int(y) ? 1.0f : 0.0f);
++      const float c = fw_lc[o] * (1.0f / 15.0f);
++      dl[o] = d * (1.0f - c * c);
++    }
++    dl[205] = dl[206] = dl[207] = 0.0f;
++    const double tt = double(fw_t);
++    fw_t++;
++    if (e2.logit) {
++      // NLMS on [xn; 1]: |xn|^2 == D up to the norm's eps, so the
++      // denominator is the constant 1 + D + 1.
++      const float lr = float(double(e2.af) + double(e2.a0 - e2.af) /
++                                                 (1.0 + tt / double(e2.atau))) *
++                       (1.0f / float(D + 2));
++      float* A = lg_A.data();
++      for (int i = 0; i < D; i++) {
++        const float c = lr * fw_xn[i];
++        float* row = A + size_t(i) * 208;
++        for (int o = 0; o < 208; o++) row[o] -= c * dl[o];
++      }
++      float* bias = A + size_t(D) * 208;
++      for (int o = 0; o < 208; o++) bias[o] -= lr * dl[o];
++    }
++    if (e2.fwk == 0) return;
++    // back through the frozen unembedding (float copy) and the RMS norm
++    alignas(64) float gxn[D];
++    for (int i = 0; i < D; i++) gxn[i] = 0.0f;
++    const float* U = M.unembed_f32.data();
++    for (int o = 0; o < V; o++) {
++      const float g = dl[o];
++      const float* row = U + size_t(o) * D;
++      for (int i = 0; i < D; i++) gxn[i] += row[i] * g;
++    }
++    float m = 0.0f;
++    for (int i = 0; i < D; i++) m += gxn[i] * fw_xn[i];
++    m *= (1.0f / float(D));
++    alignas(64) float gx[D];
++    for (int i = 0; i < D; i++) gx[i] = fw_denom * (gxn[i] - fw_xn[i] * m);
++    const double kap =
++        double(e2.kf) + double(e2.k0 - e2.kf) / (1.0 + tt / double(e2.tau));
++    // per-feature RMS preconditioning, one NLMS step over all blocks
++    const float fb = 999000.0e-6f;
++    const __m256 vfb = _mm256_set1_ps(fb);
++    float hsh = 0.0f;
++    for (int b = 0; b < e2.fwk; b++) {
++      float* const v = fw_v[b];
++      const uint16_t* const idx = fw_idx[b];
++      const float* const h = fw_h[b];
++      float* const sh = fw_sh[b];
++      const int nnz = fw_nnz[b];
++      for (int i = 0; i < DMLP; i += 8)
++        _mm256_store_ps(v + i, _mm256_mul_ps(_mm256_load_ps(v + i), vfb));
++      for (int k = 0; k < nnz; k++) v[idx[k]] += (1.0f - fb) * h[k] * h[k];
++      __m256 acc = _mm256_setzero_ps();
++      for (int i = 0; i < DMLP; i += 8)
++        acc = _mm256_add_ps(acc, _mm256_sqrt_ps(_mm256_load_ps(v + i)));
++      const float msd = hsum8(acc) * (1.0f / float(DMLP));
++      for (int k = 0; k < nnz; k++) {
++        const float sk = msd / (std::sqrt(v[idx[k]]) + 1e-3f * msd + 1e-12f);
++        sh[k] = sk * h[k];
++        hsh += h[k] * sh[k];
++      }
++    }
++    const float step = float(kap) / (1.0f + hsh);
++    for (int b = 0; b < e2.fwk; b++) {
++      const uint16_t* const idx = fw_idx[b];
++      const float* const sh = fw_sh[b];
++      const int nnz = fw_nnz[b];
++      float* const dWb = fw_dW.data() + size_t(b) * DMLP * D;
++      for (int k = 0; k < nnz; k++) {
++        float* col = dWb + size_t(idx[k]) * D;
++        const float c = step * sh[k];
++        for (int j = 0; j < D; j++) col[j] -= c * gx[j];
++      }
++    }
++  }
++
+   explicit TransformerOptImpl(const char* path, AttnKind k) : kind(k) {
+     M.load(path);
+     const size_t kda_sz = sizeof(KdaState) * 9;
+@@ -486,6 +651,7 @@ struct TransformerOptImpl {
+       else
+         qsparse4_add(mm.down, q768, idx768, nnz, x);
+     }
++    if (e2.fwk > 0 && l >= NL - e2.fwk) fw_apply(l - (NL - e2.fwk), mm.down_s_act);
+   }
+ 
+   // prior must be the cap-208 internal buffer with pads [205..208) zeroed
+@@ -537,11 +703,14 @@ struct TransformerOptImpl {
+       PSCOPE(PS_MM_UNEMB);
+       qgemv_f32(M.unembed.m, q5, logits);  // rows_padded 208
+     }
++    if (e2.logit && e2.fwk == 0)
++      std::memcpy(raw_logits, logits, sizeof(float) * 208);
+     {
+       PSCOPE(PS_EL_HEAD);
+       head_softcap_softmax(logits, probs208);
+       std::memcpy(probs_out, probs208, sizeof(float) * V);
+     }
++    if (e2.on()) e2_head();
+     t++;
+   }
+ };
+@@ -572,5 +741,9 @@ const float* TransformerOpt::last_logits() const { return impl->logits; }
+ 
+ AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
+ 
++void TransformerOpt::e2_set(const E2Config& cfg) { impl->e2_set(cfg); }
++const float* TransformerOpt::e2_probs() const { return impl->fw_probs208; }
++void TransformerOpt::e2_update(uint8_t target) { impl->e2_update(target); }
++
+ }  // namespace opt
+ }  // namespace fx2
+diff --git a/cpp_infer/src/opt/model_opt.h b/cpp_infer/src/opt/model_opt.h
+index 11deec2..cf6eaeb 100644
+--- a/cpp_infer/src/opt/model_opt.h
++++ b/cpp_infer/src/opt/model_opt.h
+@@ -24,6 +24,26 @@ enum class AttnKind : int { KVF32 = 0, KVI8 = 1 };
+ 
+ struct TransformerOptImpl;
+ 
++// [sub100mil E2] online correction head on the frozen transformer. Runtime
++// state only (zero-initialized, learned from already-coded symbols, identical
++// in compressor and decompressor); nothing is stored in the archive.
++//  fwk   > 0: ex-girlfriend-style fast weights. The relu^2 codes h_b of the
++//              last fwk MLP blocks drive a residual correction
++//              dx = sum_b dW_b h_b (dW_b: 192 x 768, zero init); a second head
++//              reads x + dx through the frozen final norm/unembedding/softcap.
++//  logit = 1:  a 205 x (192+1) logit-space correction A [xn; 1] added to the
++//              pre-softcap logits of that second head (online softmax
++//              regression on the final normalized hidden state).
++// Both are trained by one SGD step per predicted token on the second head's
++// own cross-entropy (fixed float op order -> deterministic).
++struct E2Config {
++  int fwk = 0;                 // 0..4 FW blocks
++  int logit = 0;               // 0/1 logit-space head
++  float k0 = 6.0e-3f, kf = 1.5e-3f, tau = 8000.0f;  // FW kappa_t schedule
++  float a0 = 0.5f, af = 0.1f, atau = 8000.0f;       // logit head schedule
++  bool on() const { return fwk > 0 || logit; }
++};
++
+ struct TransformerOpt {
+   explicit TransformerOpt(const char* weights_path,
+                           AttnKind attn = AttnKind::KVF32);
+@@ -46,6 +66,12 @@ struct TransformerOpt {
+ 
+   AttnKind attn_kind() const;
+ 
++  // [sub100mil E2] see E2Config. e2_probs() is the second head's distribution
++  // of the last step (valid when on()); e2_update(y) trains on target y.
++  void e2_set(const E2Config& cfg);
++  const float* e2_probs() const;
++  void e2_update(uint8_t target);
++
+  private:
+   std::unique_ptr<TransformerOptImpl> impl;
+ };
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index c5762d2..b765a64 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -280,6 +280,31 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     half_scratch_.resize(vocab_size_);
+     transformer_probs_.resize(vocab_size_);
+     print_transformer_loss_ = true;
++    {  // [sub100mil E2] runtime configuration (encoder and decoder must match)
++      auto geti = [](const char* n, int d) {
++        const char* v = getenv(n); return v && *v ? atoi(v) : d; };
++      auto getf = [](const char* n, float d) {
++        const char* v = getenv(n); return v && *v ? strtof(v, nullptr) : d; };
++      e2_cfg_.fwk = geti("E2_FWK", 0);
++      e2_cfg_.logit = geti("E2_LOGIT", 0);
++      e2_cfg_.k0 = getf("E2_K0", e2_cfg_.k0);
++      e2_cfg_.kf = getf("E2_KF", e2_cfg_.kf);
++      e2_cfg_.tau = getf("E2_TAU", e2_cfg_.tau);
++      e2_cfg_.a0 = getf("E2_A0", e2_cfg_.a0);
++      e2_cfg_.af = getf("E2_AF", e2_cfg_.af);
++      e2_cfg_.atau = getf("E2_ATAU", e2_cfg_.atau);
++      e2_final_ = geti("E2_FINAL", 1) != 0;
++      e2_on_ = e2_cfg_.on();
++      if (e2_on_) {
++        transformer_->e2_set(e2_cfg_);
++        e2_half_.resize(vocab_size_);
++        e2_row_.assign(vocab_size_, 1.0f);
++        fprintf(stderr, "E2: fwk=%d logit=%d k0=%g kf=%g tau=%g a0=%g af=%g "
++            "atau=%g final=%d\n", e2_cfg_.fwk, e2_cfg_.logit, e2_cfg_.k0,
++            e2_cfg_.kf, e2_cfg_.tau, e2_cfg_.a0, e2_cfg_.af, e2_cfg_.atau,
++            (int)e2_final_);
++      }
++    }
+     if (!options.save_transformer_probs.empty()) {
+       transformer_probs_writer_.reset(
+           new HalfFileWriter(options.save_transformer_probs));
+@@ -321,6 +346,7 @@ unsigned long long Predictor::GetNumModels() {
+   num += 1;  // ppmd byte model (a constant input with
+              // --load-transformer-probs)
+   num += byte_mixer_->NumOutputs();
++  if (e2_on_) num += 1;  // [sub100mil E2] correction-head byte slot
+   return num;
+ }
+ 
+@@ -429,6 +455,8 @@ void Predictor::AddMixers() {
+   byte_mixer_.emplace(1, manager_.bit_context_, vocab_,
+       vocab_size, transformer_ ? nullptr :
+       new Lstm(vocab_size, vocab_size, 200, 1, 128, 0.03, 10));
++  if (e2_on_) e2_mixer_.emplace(1, manager_.bit_context_, vocab_, vocab_size,
++      nullptr);
+ 
+   for (int i = 0; i < 2; ++i) {
+     layers_.emplace_back(sigmoid_,
+@@ -463,7 +491,7 @@ void Predictor::AddMixers() {
+   AddMixer(0, manager_.mx14, 0.005);
+   AddMixer(0, manager_.mx15, 0.005);
+ 
+-  input_size = mixer_0_.size() + auxiliary_size_;
++  input_size = mixer_0_.size() + auxiliary_size_ + (e2_on_ && e2_final_ ? 1 : 0);
+   layers_[1].SetNumModels(input_size);
+ 
+   AddMixer(1,manager_.zero_context_, 0.0003);
+@@ -538,6 +566,11 @@ float Predictor::Predict() {
+   if (byte_mixer_output == 0 || byte_mixer_output == 1) byte_mixer_override = byte_mixer_output;
+   layers_[0].SetInput(input_index++, byte_mixer_output);
+   auto byte_mixer_index = input_index - 1;
++  unsigned int e2_index = 0;
++  if (e2_on_) {
++    e2_index = input_index;
++    layers_[0].SetInput(input_index++, e2_output_);
++  }
+ 
+   float auxiliary_average = Sigmoid::Logistic(layers_[0].Inputs()[fxcm_model_index]) + Sigmoid::Logistic(layers_[0].Inputs()[byte_mixer_index]);
+   auxiliary_average /= auxiliary_size_;
+@@ -553,6 +586,8 @@ float Predictor::Predict() {
+   }
+   layers_[1].SetStretchedInput(mixer_0_.size(), layers_[0].Inputs()[fxcm_model_index]);
+   layers_[1].SetStretchedInput(mixer_0_.size() + 1, layers_[0].Inputs()[byte_mixer_index]);
++  if (e2_on_ && e2_final_)
++    layers_[1].SetStretchedInput(mixer_0_.size() + 2, layers_[0].Inputs()[e2_index]);
+ 
+   p = Sigmoid::Logistic(mixer_1_[0].Mix());
+   }
+@@ -613,6 +648,9 @@ void Predictor::TransformerByteUpdate() {
+     Fail("transformer: byte 0x%02x is not in the vocabulary",
+         manager_.bit_context_);
+   }
++  // [sub100mil E2] train on the byte just coded, iff the head predicted it
++  if (e2_pending_) transformer_->e2_update((uint8_t)token);
++  e2_pending_ = false;
+   memmove(separator_window_, separator_window_ + 1,
+       sizeof(separator_window_) - 1);
+   separator_window_[sizeof(separator_window_) - 1] = (unsigned char)token;
+@@ -636,6 +674,14 @@ void Predictor::TransformerByteUpdate() {
+     FloatsToHalves(transformer_probs_.data(), half_scratch_.data(),
+         vocab_size_);
+     HalvesToFloats(half_scratch_.data(), probs_scratch_.data(), vocab_size_);
++    if (e2_on_) {  // same float16 rounding and floor as the static row
++      FloatsToHalves(transformer_->e2_probs(), e2_half_.data(), vocab_size_);
++      HalvesToFloats(e2_half_.data(), e2_row_.data(), vocab_size_);
++      for (unsigned int i = 0; i < vocab_size_; ++i) {
++        if (!(e2_row_[i] >= 1e-6f)) e2_row_[i] = 1e-6f;
++      }
++      e2_pending_ = true;
++    }
+   }
+   if (transformer_probs_writer_) {
+     transformer_probs_writer_->WriteHalves(half_scratch_.data(), vocab_size_);
+@@ -643,6 +689,9 @@ void Predictor::TransformerByteUpdate() {
+   for (unsigned int i = 0; i < vocab_size_; ++i) {
+     if (!(probs_scratch_[i] >= 1e-6f)) probs_scratch_[i] = 1e-6f;
+   }
++  // [sub100mil E2] at piece starts the head row is the static (ppmd) row
++  if (e2_on_ && !e2_pending_) e2_row_ = probs_scratch_;
++  if (e2_mixer_) e2_mixer_->SetProbs(e2_row_.data());
+   // With --transformer-only there is no byte mixer: probs_scratch_ is the
+   // final destination of the distribution (and what the loss is measured on).
+   if (byte_mixer_) byte_mixer_->SetProbs(probs_scratch_.data());
+@@ -669,12 +718,26 @@ void Predictor::AccumulateTransformerLoss() {
+   double ratio = sum > 0 ? prob / sum : 0;
+   if (!(ratio > 1e-38)) ratio = 1e-38;  // avoid inf from zero probabilities
+   transformer_loss_sum_ -= std::log(ratio);
++  if (e2_on_) {  // [sub100mil E2] the head's own loss and a 50/50 mix proxy
++    double s2 = 0, p2 = 0;
++    for (unsigned int i = 0; i < vocab_size_; ++i) s2 += e2_row_[i];
++    int index = byte_to_index_[manager_.bit_context_];
++    if (index >= 0) p2 = e2_row_[index];
++    double r2 = s2 > 0 ? p2 / s2 : 0;
++    if (!(r2 > 1e-38)) r2 = 1e-38;
++    e2_loss_sum_ -= std::log(r2);
++    e2_mix_loss_sum_ -= std::log(0.5 * ratio + 0.5 * r2);
++  }
+   ++transformer_tokens_;
+   if (transformer_tokens_ % 1000000 == 0 ||
+       transformer_tokens_ == num_input_bytes_) {
+     fprintf(stderr, "\r%*s\r", 70, "");  // clear the progress line
+     printf("transformer loss: %.6f nats/token over %llu tokens\n",
+         transformer_loss_sum_ / transformer_tokens_, transformer_tokens_);
++    if (e2_on_)
++      printf("E2 head loss: %.6f nats/token, 50/50 mix %.6f\n",
++          e2_loss_sum_ / transformer_tokens_,
++          e2_mix_loss_sum_ / transformer_tokens_);
+     fflush(stdout);
+   }
+ }
+@@ -718,7 +781,7 @@ void Predictor::Perceive(int bit) {
+ 
+   { PROF(PPMD); if (byte_model_) byte_model_->Perceive(bit); }
+ 
+-  { PROF(BMIX); byte_mixer_->Perceive(bit); }
++  { PROF(BMIX); byte_mixer_->Perceive(bit); if (e2_mixer_) e2_mixer_->Perceive(bit); }
+ 
+   {
+   PROF(MIX);
+@@ -782,7 +845,8 @@ void Predictor::Perceive(int bit) {
+       LoadTransformerProbs();
+     }
+   }
+-  { PROF(BMIX); byte_mixer_output = byte_mixer_->Predict()[0]; }
++  { PROF(BMIX); byte_mixer_output = byte_mixer_->Predict()[0];
++    if (e2_mixer_) e2_output_ = e2_mixer_->Predict()[0]; }
+   lstmpr=Discretize(byte_mixer_output);
+   lstmex=byte_mixer_->ex;
+   { PROF(FXCM); fxcm_model_->Perceive(bit); }
+diff --git a/src/predictor.h b/src/predictor.h
+index 12d7c01..ceab656 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -190,6 +190,18 @@ class Predictor {
+   // training data loader's split_article_lengths; each piece is a fresh
+   // transformer context.
+   unsigned long long article_tokens_ = 0;
++
++  // [sub100mil E2] online correction head (cpp_infer/src/opt/model_opt.h
++  // E2Config), configured from E2_* environment variables. Its distribution
++  // goes through its own byte slot into layer 0 (and, with E2_FINAL, into the
++  // final mixer).
++  fx2::opt::E2Config e2_cfg_;
++  bool e2_on_ = false, e2_final_ = true, e2_pending_ = false;
++  std::optional<ByteMixer> e2_mixer_;
++  std::vector<uint16_t> e2_half_;
++  std::vector<float> e2_row_;
++  float e2_output_ = 0.5f;
++  double e2_loss_sum_ = 0, e2_mix_loss_sum_ = 0;
+ };
+ 
+ #endif
