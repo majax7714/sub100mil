@@ -36,6 +36,10 @@ too. Record L = 100,424,672 bytes (Sep 2026). A prize needs S < 99,420,425.
   CPU time on the dev box is free, so it's the budget to spend.
 - **Every GPU spend needs a cited estimate first.** Before any GPU job, write down the estimated hours and dollars per
   vendor, using the numbers in docs/COMPUTE.md (never estimate from memory), and get the user's OK.
+- **Follow the evidence, but don't close doors (2026-11-05).** Batch 1 showed that transformer-side mechanisms
+  beat CM-side ones by about 5×, so the transformer is the *current* winning path. That's an observation, not a
+  constraint. Keep at least one non-transformer mechanism (specialist models, retrieval, preprocessing, new
+  predictor classes) in every batch.
 - **Third-party code** is fetched by script into gitignored `third_party/`, pinned to exact commits, and never
   vendored into the repo. Respect its license (most of the cmix lineage is GPL).
 

@@ -100,8 +100,16 @@ scripts/fetch_refs.sh
 
 ## slot.sh
 
-Limits how many heavy (multi-GB RAM) runs execute at once across parallel agents. The default is 3 slots.
+Limits how many heavy (about 6 GB RAM each) runs execute at once across parallel agents. There are two lanes:
+the main lane (`SLOTS`, default 2) for 10M+ runs, and a fast lane (`--fast`, `FAST_SLOTS`, default 1) only for
+runs on slices of 1 MB or less, so short runs don't wait hours behind long ones. That's at most 3 runs, about 18 GB.
 ```sh
-scripts/slot.sh scripts/bench.sh --method ... --slice ... --comp ... --decomp ...
+scripts/slot.sh scripts/bench.sh --method ... --slice data/slices/enwik9_10M ...
+scripts/slot.sh --fast scripts/bench.sh --method ... --slice data/slices/enwik9_1M ...
 ```
 Timings taken while other slots are busy are contended, so don't use them for speed claims. Clean timing needs an idle box.
+
+**Waiting on a run:** don't write `until ! pgrep -f 'PATTERN'` loops. The pattern is in the waiting shell's own
+command line, so pgrep always matches itself and the loop never ends (four such loops from A1 were orphaned for
+4+ h on 2026-11-05). Run the benchmark in the background and wait for its completion notification, or wait on the
+PID (`while kill -0 $PID; do sleep 30; done`).
