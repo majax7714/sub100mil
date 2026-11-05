@@ -12,6 +12,25 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: cmix-neif built and profiled (reference, no changes)
+- **Type:** measurement (baseline characterization)
+- **Did:** Built neif with g++ 15.3.1 (`-march=x86-64-v3`, LTO, no PGO). Patch in `patches/cmix-neif/`; write-up in
+  `docs/refs/cmix-neif.md`. Not slice-compatible (frozen 208-symbol alphabet, full-enwik9 metadata, order and dictionary), so
+  the patch adds `NEIF_DUMP_STREAM`/`NEIF_STREAM_MODE` to code prefixes of its 552.75 MB preprocessed stream.
+- **Numbers:** Stream prefixes: 1M 339,336 B, 10M 1,918,894 B (round-trip OK), 24M 4,209,622 B (compress only).
+  Full-run ESTIMATE about 42.4 h per direction on this box (about 0.87× the official EPYC time). Peak RSS 9.55 GiB.
+  Our self-extracting package is 4,569,502 B vs the official 4,000,689; the +569 KB is their packed stub, which needs clang.
+- **Learned:**
+  - **Time breakdown (perf, article window):** transformer 58.9% (153 µs/token), fxcm 24.2%, mixers/SSE 5.7%, LSTM 4.6%,
+    PPMd 1.8%, BITLSTM 1.1%.
+  - **The transformer is L3-bandwidth bound.** It reads about 11.2 MB per token, and its matmuls run at 112 GB/s, the
+    measured single-core L3 bandwidth. Contention with an L3 co-runner makes it 2.25× slower per step.
+  - The CM side causes about 87% of DRAM misses.
+  - Prefixes under 8.81 MB are metadata or redirects and not representative; 24M is the first prefix that is mostly article text.
+- **Next:** CPU-side candidates (no retraining): exact batched prompt-row matmul, int4-packed weights to shrink the L3
+  footprint, prefetching for the CM DRAM misses, and spending the saved time on online correction models (BITLSTM gives about −0.3 MB
+  for 1.1% of time). These are portable onto the record codebase.
+
 ## 2026-11-04: compute budget survey + reference clones
 - **Did:** Cloned `third_party/cmix-neif-1.0` at 1c9ea5e and `third_party/fx2-cmix-transformer-v1` at 83f2603 (not built yet).
   Surveyed free and cheap GPU compute, written to `docs/COMPUTE.md` with cited prices and quotas.
