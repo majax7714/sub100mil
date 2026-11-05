@@ -1,0 +1,10 @@
+# corpus and derived slices: reproduce with scripts/fetch_data.sh
+/data/
+# build outputs
+/build/
+*.o
+*.a
+*.so
+# local scratch
+*.tmp
+__pycache__/
