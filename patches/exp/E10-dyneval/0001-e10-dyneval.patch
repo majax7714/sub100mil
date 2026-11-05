@@ -35,10 +35,10 @@ index 0ad32c5..cf812c7 100644
    int layer2kimi[NL] = {};
    int layer2van[NL] = {};
 diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
-index ba8c2ab..101da3d 100644
+index ba8c2ab..4be2dcc 100644
 --- a/cpp_infer/src/opt/model_opt.cpp
 +++ b/cpp_infer/src/opt/model_opt.cpp
-@@ -446,6 +446,405 @@ struct TransformerOptImpl {
+@@ -446,6 +446,420 @@ struct TransformerOptImpl {
      }
    }
  
@@ -286,8 +286,23 @@ index ba8c2ab..101da3d 100644
 +    e10_stat_nnz += e10_nnz[l];
 +    e10_stat_kept += nnz;
 +    alignas(64) float c[DMLP + 16];
++    // software prefetch (exact, no numeric effect): the 2 lines of the down
++    // column and the 6 lines of the up row of neuron k + PF, so the dxn pass
++    // below also finds its rows in L1/L2
++    constexpr int PF = 8;
++    const uint8_t* const upa = mm.up.m.arena;
++    auto pf = [&](int i) {
++      const char* cp = reinterpret_cast<const char*>(mm.down.cols) + size_t(i) * 128;
++      _mm_prefetch(cp, _MM_HINT_T0);
++      _mm_prefetch(cp + 64, _MM_HINT_T0);
++      const char* rp = reinterpret_cast<const char*>(upa) + size_t(i >> 3) * 1600 +
++                       64 + (i & 7) * 32;
++      for (int c = 0; c < 6; c++) _mm_prefetch(rp + c * 256, _MM_HINT_T0);
++    };
++    for (int k = 0; k < nnz && k < PF; k++) pf(idx[k]);
 +    for (int k = 0; k < nnz; k++) {
 +      const int i = idx[k];
++      if (k + PF < nnz) pf(idx[k + PF]);
 +      const int32_t d = e10_col_dot(mm.down.cols + size_t(i) * 128, gq);
 +      const float dhp = sg * float(d - 7 * gsum);  // dL/dh'_i
 +      const float r = std::max(yv[i], 0.0f);
@@ -444,7 +459,7 @@ index ba8c2ab..101da3d 100644
    explicit TransformerOptImpl(const char* path, AttnKind k) : kind(k) {
      M.load(path);
      const size_t kda_sz = sizeof(KdaState) * 9;
-@@ -538,7 +937,7 @@ struct TransformerOptImpl {
+@@ -538,7 +952,7 @@ struct TransformerOptImpl {
      }
      {
        PSCOPE(PS_MM_KOP);
@@ -453,7 +468,7 @@ index ba8c2ab..101da3d 100644
      }
    }
  
-@@ -643,7 +1042,7 @@ struct TransformerOptImpl {
+@@ -643,7 +1057,7 @@ struct TransformerOptImpl {
      }
      {
        PSCOPE(PS_MM_VOP);
@@ -462,7 +477,7 @@ index ba8c2ab..101da3d 100644
      }
    }
  
-@@ -653,12 +1052,39 @@ struct TransformerOptImpl {
+@@ -653,12 +1067,39 @@ struct TransformerOptImpl {
        PSCOPE(PS_EL_NQ_MLP);
        rms_norm_quant192(x, xn, mm.up.s_act, q5);
      }
@@ -504,7 +519,7 @@ index ba8c2ab..101da3d 100644
        PSCOPE(PS_MM_MLP_DOWN);
        if (nnz > DOWN_DENSE_NNZ)
          qsparse4_dense_add(mm.down, q768, x);
-@@ -699,6 +1125,7 @@ struct TransformerOptImpl {
+@@ -699,6 +1140,7 @@ struct TransformerOptImpl {
          if (l >= 6) add_scaled192(x, M.skip_w[l - 6], skip_store[11 - l]);
          axpby_tok192(M.rsc[l], x, M.tec[l], tok);
        }
@@ -512,7 +527,7 @@ index ba8c2ab..101da3d 100644
        if (OptModel::KIMI_L[l])
          kimi_layer(M.layer2kimi[l]);
        else
-@@ -725,6 +1152,17 @@ struct TransformerOptImpl {
+@@ -725,6 +1167,17 @@ struct TransformerOptImpl {
        head_softcap_softmax(logits, probs208);
        std::memcpy(probs_out, probs208, sizeof(float) * V);
      }
@@ -530,7 +545,7 @@ index ba8c2ab..101da3d 100644
      if (e2.on()) e2_head();
      t++;
    }
-@@ -759,6 +1197,8 @@ AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
+@@ -759,6 +1212,8 @@ AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
  void TransformerOpt::e2_set(const E2Config& cfg) { impl->e2_set(cfg); }
  const float* TransformerOpt::e2_probs() const { return impl->fw_probs208; }
  void TransformerOpt::e2_update(uint8_t target) { impl->e2_update(target); }
