@@ -18,5 +18,5 @@ for cfg in "ppmd_only:--ppmd-only" "tf_only:--transformer $W --transformer-only"
   rm -f ppm.temp progress.log o.bin
 done
 perf record -q -F 499 -o perf_full.data taskset -c "$CORE" "$R/cmix_syms" -c "$D" s.pre o.bin --transformer "$W" > log_rec.txt 2>&1
-perf report -i perf_full.data --no-children --sort symbol --stdio 2>/dev/null | grep -v "^#" | grep -v "^$" | head -80 > report_full.txt
+perf report -i perf_full.data --no-children --sort symbol --stdio 2>/dev/null | grep -v "^#" | grep -v "^$" > report_full.txt || true
 rm -f ppm.temp progress.log o.bin s.pre
