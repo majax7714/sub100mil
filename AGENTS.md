@@ -57,7 +57,8 @@ This file is the single source of project rules for any agent (Claude, Codex, et
 - Day-to-day work happens on **slices** in `data/slices/`:
   - `enwik9_1M`: smoke tests, seconds per run
   - `enwik9_10M`: the main iteration benchmark
-  - `enwik9_mid10M`: 10 MB from offset 5×10^8, a guard against overfitting to the front of the file
+  - `enwik9_mid10M`: 10 MB from offset 5×10^8. **Caveat:** this is mostly bot-generated US census town
+    articles, so it's not representative. It's a stress test only, and a strided replacement is planned.
   - `enwik9_100M`: enwik8, the pre-full-run check
 - Full enwik9 runs are expensive. Run one only when a slice result justifies it, and log
   wall time and peak RSS (`/usr/bin/time -v`).

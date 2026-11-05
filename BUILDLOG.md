@@ -12,6 +12,19 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-04: landscape survey (read-only)
+- **Did:** Read-only survey of the record lineage and pending entries, written to `docs/LANDSCAPE.md`. Nothing cloned or run.
+- **Numbers:** The record fx2-cmix-transformer is at 100,424,672. It was the one architectural jump, −10.4M vs fx2-cmix, from a
+  6M-param offline-pretrained transformer with 4-bit weights stored in both binaries. Pending entries: cmix-neif 95,914,051,
+  zmix 99,312,424, lexth11c 99,313,750.
+- **Learned:** About 90% of cmix-neif's payload is ordinary article text at about 1.43 bits per stream byte, so the path to about 95M
+  runs through the text model. Time is the binding constraint, not bytes: neif runs 48.7 h against a 53.6 h limit, with the
+  transformer taking about 45% of it. Weights cost about 0.95 bytes of S per parameter. Every transformer direction needs GPU
+  retraining: 208 GPU-h for the record entry, about 2,800 for neif. **`enwik9_mid10M` is unrepresentative**: it is mostly bot-generated
+  US census town articles (8,695 "census" hits vs 96 in the front slice).
+- **Next:** Replace mid10M with a strided slice (e.g. 10 × 1 MB at evenly spaced offsets). Clone and build cmix-neif at 1c9ea5e
+  and fx2-cmix-transformer-v1 at 83f2603 (needs user approval). Decide on a GPU budget.
+
 ## 2026-11-04: benchmark harness
 - **Did:** Added `scripts/bench.sh` (comp → decomp → cmp → ledger row, with `/usr/bin/time -v` wall time and RSS)
   and `scripts/README.md`. Installed g++ 15.3.1 and cmake 3.31.
