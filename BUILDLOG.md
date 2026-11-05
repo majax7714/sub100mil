@@ -12,6 +12,17 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-04: compute budget survey + reference clones
+- **Did:** Cloned `third_party/cmix-neif-1.0` at 1c9ea5e and `third_party/fx2-cmix-transformer-v1` at 83f2603 (not built yet).
+  Surveyed free and cheap GPU compute, written to `docs/COMPUTE.md` with cited prices and quotas.
+- **Numbers:** Kaggle gives **30 GPU-h per week** (P100 or T4×2, 12 h sessions), plus a TPU v3-8 for 20 h a week. Modal gives $30 a month
+  (H100 $3.95/h, B200 $6.25/h). That's realistically about 74 RTX-5090-equivalent hours a month, or about 130 at best, by spec-sheet speed only.
+  Reproducing fx2-T's training (208 GPU-h) takes about 2.8 months of free quota. neif's (about 2,800 GPU-h) takes about 38 months.
+  Renting a real 5090 on Vast.ai costs $0.31–0.49/h.
+- **Learned:** Dense from-scratch training at record scale doesn't fit the budget. The user's direction is not to train
+  dense models by default, though training small pieces is fine. Inheriting neif's GPL weights and working CPU-side is the leading candidate.
+- **Next:** Pending the user's decision: read neif's build scripts, build it with AVX2, and profile where the time goes and whether it is bandwidth-bound or compute-bound.
+
 ## 2026-11-04: landscape survey (read-only)
 - **Did:** Read-only survey of the record lineage and pending entries, written to `docs/LANDSCAPE.md`. Nothing cloned or run.
 - **Numbers:** The record fx2-cmix-transformer is at 100,424,672. It was the one architectural jump, −10.4M vs fx2-cmix, from a
