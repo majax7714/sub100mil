@@ -1,0 +1,81 @@
+diff --git a/makefile b/makefile
+index 2485a5d..f7ddcc4 100644
+--- a/makefile
++++ b/makefile
+@@ -1,8 +1,15 @@
+-CC = clang++-17
++# [sub100mil gcc port] clang++-17 is not installed; build with g++.
++CC = g++
+ 
+ ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
+ 
+-CPPFLAGS_PART-THAT-SHOULD-BE-FAST := $(CFLAGS_DEFINES) -m64 -Wall -std=c++17 -ffp-model=fast -fno-exceptions -fno-threadsafe-statics -Wno-unknown-escape-sequence -Wno-unused-variable -ffp-model=fast -fno-exceptions -fno-threadsafe-statics -Wno-unneeded-internal-declaration -Wno-unused-but-set-variable -Wno-format 
++# [sub100mil gcc port] clang's -ffp-model=fast == -ffast-math + -ffp-contract=fast in gcc terms.
++# Clang-only -Wno-* flags dropped. FP results differ from the clang-17 build, so archives are NOT
++# interchangeable between the two builds (each build is self-consistent).
++# -fno-finite-math-only: gcc 15 emits RCPPS/RSQRTPS under -ffast-math even with -mrecip=none
++# (vendor-dependent results); dropping finite-math stops that and also undefines __FAST_MATH__,
++# so glibc libmvec SIMD variants of expf/tanhf are not used (scalar libm, as in the clang build).
++CPPFLAGS_PART-THAT-SHOULD-BE-FAST := $(CFLAGS_DEFINES) -m64 -Wall -std=c++17 -ffast-math -fno-finite-math-only -ffp-contract=fast -fno-exceptions -fno-threadsafe-statics -Wno-unused-variable -Wno-unused-but-set-variable -Wno-format 
+ 
+ # Instruction set. The default is the portable AVX2 baseline x86-64-v3
+ # (SSE*, AVX, AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE, POPCNT) -- exactly what
+@@ -53,6 +60,8 @@ CPPFLAGS_PART-THAT-CAN-BE-SLOW    := $(CPPFLAGS_PART-THAT-SHOULD-BE-FAST)
+ CPPFLAGS_PART-THAT-CAN-BE-SLOW    += -Os -fdata-sections -ffunction-sections
+ CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -O3 -fdata-sections -ffunction-sections
+ 
++# [sub100mil] STRIP= (empty) keeps symbols for perf; default strips as upstream.
++STRIP ?= -s
+ LFLAGS := -m64 -Wl,--gc-sections -std=c++17
+ 
+ # Transformer inference objects (cpp_infer). Compiled with the exact flag set
+@@ -84,9 +93,9 @@ prof_gen: CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -fprofile-generate=$(ROOT_DIR)/pg
+ prof_gen: LFLAGS                            += -fprofile-generate=$(ROOT_DIR)/pgo_data
+ prof_gen: clean cmix
+ 
+-prof_use: CPPFLAGS_PART-THAT-CAN-BE-SLOW    += -fprofile-use=$(ROOT_DIR)/pgo_data -flto
+-prof_use: CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -fprofile-use=$(ROOT_DIR)/pgo_data -flto
+-prof_use: LFLAGS                            += -fprofile-use=$(ROOT_DIR)/pgo_data -flto
++prof_use: CPPFLAGS_PART-THAT-CAN-BE-SLOW    += -fprofile-use=$(ROOT_DIR)/pgo_data -fprofile-partial-training -Wno-missing-profile -flto=auto
++prof_use: CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -fprofile-use=$(ROOT_DIR)/pgo_data -fprofile-partial-training -Wno-missing-profile -flto=auto
++prof_use: LFLAGS                            += -fprofile-use=$(ROOT_DIR)/pgo_data -fprofile-partial-training -flto=auto $(ARCHFLAGS) -O3
+ prof_use: clean cmix
+ 
+ 
+@@ -97,7 +106,7 @@ fast: src/coder/decoder.cpp src/coder/decoder.h src/coder/encoder.cpp src/coder/
+ 	$(CC) $(CPPFLAGS_PART-THAT-SHOULD-BE-FAST) src/coder/decoder.cpp src/coder/encoder.cpp src/context-manager.cpp src/contexts/bit-context.cpp src/contexts/bracket-context.cpp src/contexts/combined-context.cpp src/contexts/context-hash.cpp src/contexts/indirect-hash.cpp src/contexts/interval-hash.cpp src/contexts/interval.cpp src/contexts/sparse.cpp src/models/bracket.cpp src/models/byte-model.cpp src/models/direct-hash.cpp src/models/direct.cpp src/models/indirect.cpp src/models/match.cpp src/models/fxcmv1.cpp src/models/ppmd.cpp src/states/nonstationary.cpp src/states/run-map.cpp src/mixer/byte-mixer.cpp src/mixer/mixer-input.cpp src/mixer/mixer.cpp src/mixer/sigmoid.cpp src/mixer/sse.cpp -c src/predictor.cpp src/runner.cpp
+ 
+ cmix: fast slow $(TRANSFORMER_OBJS)
+-	$(CC) $(LFLAGS) bit-context.o bracket-context.o bracket.o byte-mixer.o byte-model.o combined-context.o context-hash.o context-manager.o decoder.o dictionary.o direct-hash.o direct.o encoder.o indirect-hash.o indirect.o interval-hash.o interval.o match.o mixer-input.o mixer.o nonstationary.o fxcmv1.o ppmd.o predictor.o preprocessor.o run-map.o runner.o sigmoid.o sparse.o sse.o $(TRANSFORMER_OBJS) -s -o cmix
++	$(CC) $(LFLAGS) bit-context.o bracket-context.o bracket.o byte-mixer.o byte-model.o combined-context.o context-hash.o context-manager.o decoder.o dictionary.o direct-hash.o direct.o encoder.o indirect-hash.o indirect.o interval-hash.o interval.o match.o mixer-input.o mixer.o nonstationary.o fxcmv1.o ppmd.o predictor.o preprocessor.o run-map.o runner.o sigmoid.o sparse.o sse.o $(TRANSFORMER_OBJS) $(STRIP) -o cmix
+ 	rm -f *.o
+ 
+ remap: src/readalike_prepr/article_remap.cpp
+@@ -115,3 +124,15 @@ data/enwik9:
+ 	wget -P data/ http://mattmahoney.net/dc/enwik9.zip
+ 	unzip data/enwik9.zip -d data/
+ 	rm data/enwik9.zip
++
++# [sub100mil slice patch] prefix-of-enwik9 version of the -e preprocessing
++slicetool: src/slice_pipeline.cpp src/readalike_prepr/phda9_preprocess.h
++	$(CC) -O2 -std=c++17 -w src/slice_pipeline.cpp -o slicetool
++
++# [sub100mil prof patch] instrumented build: per-model rdtsc accounting (-DFX2_PROF in the CM objects
++# and in tf_model_opt.o, which enables the transformer's own per-part profile). Not PGO'd; compare
++# against the plain non-PGO build, not against the PGO build.
++prof: CPPFLAGS_PART-THAT-CAN-BE-SLOW    += -DFX2_PROF
++prof: CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -DFX2_PROF
++prof: CPPFLAGS_TRANSFORMER              += -DFX2_PROF
++prof: clean cmix
+diff --git a/src/models/fxcmv1.cpp b/src/models/fxcmv1.cpp
+index 06a83d2..fc45bba 100644
+--- a/src/models/fxcmv1.cpp
++++ b/src/models/fxcmv1.cpp
+@@ -17,6 +17,7 @@
+     Visit <http://www.gnu.org/copyleft/gpl.html>.
+ */
+ 
++#include <cstdint>  // [sub100mil gcc port] uintptr_t; clang pulled it in transitively
+ #include "fxcmv1.h"
+ 
+ #include <stdio.h>

@@ -1,0 +1,147 @@
+diff --git a/src/slice_pipeline.cpp b/src/slice_pipeline.cpp
+new file mode 100644
+index 0000000..8ef1226
+--- /dev/null
++++ b/src/slice_pipeline.cpp
+@@ -0,0 +1,141 @@
++// [sub100mil slice patch] slice_pipeline: the enwik9-specific preprocessing of
++// `cmix -e`, generalized to a prefix of enwik9 so the full model (CM + frozen
++// transformer) can be measured on slices.
++//
++//   slicetool pre  <prefix-of-enwik9> <out>   (out is then fed to cmix -c dict ...)
++//   slicetool post <in> <restored-prefix>     (inverse, after cmix -d dict ...)
++//
++// What -e does for enwik9 (runner.cpp): split into intro (first 29 lines, the
++// <siteinfo> header), main (the complete <page>s) and coda (the rest, which
++// starts mid-article), reorder the articles of main, apply the phda9 WIT
++// transform to main (moves per-article id/timestamp/contributor fields and
++// language links into blocks at the end of main, rewrites HTML entities), and
++// code main_enc + intro + coda with WRT dictionary + CM.
++//
++// This tool does the same split (main = lines 29 .. the last "  </page>" line
++// of the prefix, coda = everything after it), the same phda9 transform and the
++// same concatenation order. It does NOT reorder articles (the order file covers
++// all 243,425 enwik9 articles). A 40-byte ASCII trailer with the main_enc and
++// intro sizes is appended so the inverse can split the stream; it is coded by
++// cmix as part of the stream (counted in the output size).
++//
++// GPL-3.0 (links the fx2-cmix-transformer phda9 code).
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <vector>
++
++#include "readalike_prepr/phda9_preprocess.h"
++
++static const int kIntroLines = 29;  // COMP_INTRO_END_LINE in misc.h
++static const size_t kTrailer = 40;
++
++static std::vector<unsigned char> ReadAll(const char* path) {
++  FILE* f = fopen(path, "rb");
++  if (!f) { fprintf(stderr, "slicetool: cannot open %s\n", path); exit(1); }
++  fseeko(f, 0, SEEK_END);
++  size_t n = ftello(f);
++  fseeko(f, 0, SEEK_SET);
++  std::vector<unsigned char> v(n);
++  if (n && fread(v.data(), 1, n, f) != n) { fprintf(stderr, "slicetool: short read\n"); exit(1); }
++  fclose(f);
++  return v;
++}
++
++static std::vector<unsigned char> Slurp(FILE* f) {
++  fflush(f);
++  fseeko(f, 0, SEEK_END);
++  size_t n = ftello(f);
++  fseeko(f, 0, SEEK_SET);
++  std::vector<unsigned char> v(n);
++  if (n && fread(v.data(), 1, n, f) != n) { fprintf(stderr, "slicetool: short tmp read\n"); exit(1); }
++  return v;
++}
++
++static void WriteAll(FILE* f, const unsigned char* p, size_t n) {
++  if (n && fwrite(p, 1, n, f) != n) { fprintf(stderr, "slicetool: write failed\n"); exit(1); }
++}
++
++static int Pre(const char* in_path, const char* out_path) {
++  std::vector<unsigned char> d = ReadAll(in_path);
++  size_t intro_end = 0;
++  int lines = 0;
++  while (intro_end < d.size() && lines < kIntroLines) {
++    if (d[intro_end++] == '\n') ++lines;
++  }
++  if (lines < kIntroLines) { fprintf(stderr, "slicetool: fewer than %d lines\n", kIntroLines); return 1; }
++  static const char kEnd[] = "\n  </page>\n";
++  const size_t kl = sizeof(kEnd) - 1;
++  size_t main_end = 0;
++  for (size_t i = d.size() >= kl ? d.size() - kl + 1 : 0; i-- > intro_end;) {
++    if (memcmp(d.data() + i, kEnd, kl) == 0) { main_end = i + kl; break; }
++  }
++  if (main_end <= intro_end) { fprintf(stderr, "slicetool: no complete <page> in input\n"); return 1; }
++
++  FILE* main_tmp = tmpfile();
++  FILE* enc_tmp = tmpfile();
++  if (!main_tmp || !enc_tmp) { fprintf(stderr, "slicetool: tmpfile failed\n"); return 1; }
++  WriteAll(main_tmp, d.data() + intro_end, main_end - intro_end);
++  fflush(main_tmp);
++  fseeko(main_tmp, 0, SEEK_SET);
++  encode_txt_wit(main_tmp, enc_tmp);
++  std::vector<unsigned char> enc = Slurp(enc_tmp);
++  fclose(main_tmp);
++  fclose(enc_tmp);
++
++  FILE* out = fopen(out_path, "wb");
++  if (!out) { fprintf(stderr, "slicetool: cannot open %s\n", out_path); return 1; }
++  WriteAll(out, enc.data(), enc.size());
++  WriteAll(out, d.data(), intro_end);
++  WriteAll(out, d.data() + main_end, d.size() - main_end);
++  char tr[kTrailer + 1];
++  snprintf(tr, sizeof(tr), "%020llu%020llu", (unsigned long long)enc.size(),
++      (unsigned long long)intro_end);
++  WriteAll(out, (const unsigned char*)tr, kTrailer);
++  fclose(out);
++  fprintf(stderr, "slicetool pre: intro %zu, main %zu -> %zu (phda9), coda %zu bytes\n",
++      intro_end, main_end - intro_end, enc.size(), d.size() - main_end);
++  return 0;
++}
++
++static int Post(const char* in_path, const char* out_path) {
++  std::vector<unsigned char> d = ReadAll(in_path);
++  if (d.size() < kTrailer) { fprintf(stderr, "slicetool: input too short\n"); return 1; }
++  char tr[kTrailer + 1];
++  memcpy(tr, d.data() + d.size() - kTrailer, kTrailer);
++  tr[kTrailer] = 0;
++  char a[21], b[21];
++  memcpy(a, tr, 20); a[20] = 0;
++  memcpy(b, tr + 20, 20); b[20] = 0;
++  size_t enc_size = strtoull(a, NULL, 10), intro_size = strtoull(b, NULL, 10);
++  size_t body = d.size() - kTrailer;
++  if (enc_size + intro_size > body) { fprintf(stderr, "slicetool: bad trailer\n"); return 1; }
++
++  FILE* enc_tmp = tmpfile();
++  FILE* main_tmp = tmpfile();
++  if (!main_tmp || !enc_tmp) { fprintf(stderr, "slicetool: tmpfile failed\n"); return 1; }
++  WriteAll(enc_tmp, d.data(), enc_size);
++  fflush(enc_tmp);
++  fseeko(enc_tmp, 0, SEEK_SET);
++  decode_txt_wit(enc_tmp, main_tmp, enc_size);
++  std::vector<unsigned char> main_txt = Slurp(main_tmp);
++  fclose(enc_tmp);
++  fclose(main_tmp);
++
++  FILE* out = fopen(out_path, "wb");
++  if (!out) { fprintf(stderr, "slicetool: cannot open %s\n", out_path); return 1; }
++  WriteAll(out, d.data() + enc_size, intro_size);                       // intro
++  WriteAll(out, main_txt.data(), main_txt.size());                      // main
++  WriteAll(out, d.data() + enc_size + intro_size, body - enc_size - intro_size);  // coda
++  fclose(out);
++  return 0;
++}
++
++int main(int argc, char** argv) {
++  if (argc == 4 && !strcmp(argv[1], "pre")) return Pre(argv[2], argv[3]);
++  if (argc == 4 && !strcmp(argv[1], "post")) return Post(argv[2], argv[3]);
++  fprintf(stderr, "usage: slicetool pre|post <in> <out>\n");
++  return 2;
++}

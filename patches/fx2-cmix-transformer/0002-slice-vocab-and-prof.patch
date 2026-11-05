@@ -1,0 +1,332 @@
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index b353426..c5762d2 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -10,6 +10,54 @@
+ #include <immintrin.h>
+ #endif
+ 
++// [sub100mil prof patch] -DFX2_PROF: rdtsc time accounting per model family.
++#ifdef FX2_PROF
++#include <x86intrin.h>
++#include <chrono>
++namespace fx2prof {
++enum { TF, PPMD, FXCM, CMO, CTX, MIX, SSE_, BMIX, LOSS, N };
++static const char* kNames[N] = {"transformer step (+f16 glue)", "ppmd (order25, 14GB)",
++    "fxcm (paq8-style model)", "other CM models (bracket/direct/match/indirect)",
++    "context manager update", "mixers (23 layer-0 + 1 final)", "sse", "byte mixer",
++    "transformer loss accounting"};
++static uint64_t acc[N];
++static uint64_t tokens = 0;
++struct Scope {
++  int s; uint64_t t0;
++  explicit Scope(int s_) : s(s_), t0(__rdtsc()) {}
++  ~Scope() { acc[s] += __rdtsc() - t0; }
++};
++}  // namespace fx2prof
++#define FX2P_CAT2(a, b) a##b
++#define FX2P_CAT(a, b) FX2P_CAT2(a, b)
++#define PROF(sec) fx2prof::Scope FX2P_CAT(fx2p_scope_, __LINE__)(fx2prof::sec)
++void Fx2ProfReport(uint64_t loop_ticks, double loop_seconds, unsigned long long bytes) {
++  using namespace fx2prof;
++  double hz = loop_ticks / loop_seconds;
++  uint64_t sum = 0;
++  for (int i = 0; i < N; ++i) sum += acc[i];
++  fprintf(stderr, "\n== fx2prof: coding loop %.3f s, %llu bytes, %.2f us/byte, tsc %.4f GHz ==\n",
++      loop_seconds, bytes, 1e6 * loop_seconds / bytes, hz / 1e9);
++  for (int i = 0; i < N; ++i) {
++    fprintf(stderr, "  %-50s %9.3f s  %5.1f%%  %8.2f us/byte\n", kNames[i], acc[i] / hz,
++        100.0 * acc[i] / loop_ticks, 1e6 * acc[i] / hz / bytes);
++  }
++  uint64_t rest = loop_ticks > sum ? loop_ticks - sum : 0;
++  fprintf(stderr, "  %-50s %9.3f s  %5.1f%%  %8.2f us/byte\n",
++      "unattributed (coder, loop, timer overhead)", rest / hz, 100.0 * rest / loop_ticks,
++      1e6 * rest / hz / bytes);
++  if (tokens) {
++    fprintf(stderr, "  transformer: %llu steps, %.2f us/step\n", (unsigned long long)tokens,
++        1e6 * acc[TF] / hz / tokens);
++    fflush(stderr);
++    fx2::opt::prof_print(1.0, (long)tokens);  // in TSC ticks (tsc_to_core = 1)
++    fflush(stdout);
++  }
++}
++#else
++#define PROF(sec)
++#endif
++
+ void Fail(const char* fmt, ...) {
+   va_list args;
+   va_start(args, fmt);
+@@ -434,16 +482,20 @@ float Predictor::Predict() {
+     return p;
+   }
+   unsigned int input_index = 0;
+-  auto bracket_model_output = bracket_model_->Predict()[0];
++  float bracket_model_output;
++  { PROF(CMO); bracket_model_output = bracket_model_->Predict()[0]; }
+   layers_[0].SetInput(input_index++, bracket_model_output);
+ 
+-  const auto& fxcm_model_outputs = fxcm_model_->Predict();
++  const std::valarray<float>* fxcm_outputs_ptr;
++  { PROF(FXCM); fxcm_outputs_ptr = &fxcm_model_->Predict(); }
++  const auto& fxcm_model_outputs = *fxcm_outputs_ptr;
+   for (unsigned int j = 0; j < fxcm_model_outputs.size(); ++j) {
+     layers_[0].SetInput(input_index, fxcm_model_outputs[j]);
+     ++input_index;
+   }
+   auto fxcm_model_index = input_index - 1;
+-  
++  {
++  PROF(CMO);
+ 
+   for (unsigned int i = 0; i < direct_models_.size(); ++i) {
+     const std::valarray<float>& outputs = direct_models_[i].Predict();
+@@ -476,8 +528,10 @@ float Predictor::Predict() {
+       ++input_index;
+     }
+   }
+-  layers_[0].SetInput(input_index++,
+-      byte_model_ ? byte_model_->Predict()[0] : 0.5f);
++  }
++  float ppmd_p;
++  { PROF(PPMD); ppmd_p = byte_model_ ? byte_model_->Predict()[0] : 0.5f; }
++  layers_[0].SetInput(input_index++, ppmd_p);
+ 
+   float byte_mixer_override = -1;
+ 
+@@ -489,6 +543,9 @@ float Predictor::Predict() {
+   auxiliary_average /= auxiliary_size_;
+   manager_.auxiliary_context_ =auxiliary_average * 15;
+ 
++  float p;
++  {
++  PROF(MIX);
+   for (unsigned int i = 0; i < mixer_0_.size(); ++i) {
+     float p = mixer_0_[i].Mix();
+     layers_[0].SetExtraInput(i, p);
+@@ -497,8 +554,9 @@ float Predictor::Predict() {
+   layers_[1].SetStretchedInput(mixer_0_.size(), layers_[0].Inputs()[fxcm_model_index]);
+   layers_[1].SetStretchedInput(mixer_0_.size() + 1, layers_[0].Inputs()[byte_mixer_index]);
+ 
+-  float p = Sigmoid::Logistic(mixer_1_[0].Mix());
+-  p = sse_.Predict(p);
++  p = Sigmoid::Logistic(mixer_1_[0].Mix());
++  }
++  { PROF(SSE_); p = sse_.Predict(p); }
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -572,6 +630,9 @@ void Predictor::TransformerByteUpdate() {
+     if (article_tokens_ == 1) transformer_->begin_article();
+     transformer_->step((uint8_t)token, half_scratch_.data(),
+         transformer_probs_.data());
++#ifdef FX2_PROF
++    ++fx2prof::tokens;
++#endif
+     FloatsToHalves(transformer_probs_.data(), half_scratch_.data(),
+         vocab_size_);
+     HalvesToFloats(half_scratch_.data(), probs_scratch_.data(), vocab_size_);
+@@ -637,6 +698,8 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  {
++  PROF(CMO);
+   bracket_model_->Perceive(bit);
+ 
+   for (unsigned int i = 0; i < direct_models_.size(); ++i) {
+@@ -651,26 +714,31 @@ void Predictor::Perceive(int bit) {
+   for (unsigned int i = 0; i < indirect_r_models_.size(); ++i) {
+     indirect_r_models_[i].Perceive(bit);
+   }
++  }
+ 
+-  if (byte_model_) byte_model_->Perceive(bit);
++  { PROF(PPMD); if (byte_model_) byte_model_->Perceive(bit); }
+ 
+-  byte_mixer_->Perceive(bit);
++  { PROF(BMIX); byte_mixer_->Perceive(bit); }
+ 
++  {
++  PROF(MIX);
+   for (auto& mixer: mixer_0_) {
+     mixer.Perceive(bit);
+   }
+   for (auto& mixer: mixer_1_) {
+     mixer.Perceive(bit);
+   }
++  }
+ 
+-  sse_.Perceive(bit);
++  { PROF(SSE_); sse_.Perceive(bit); }
+ 
+   bool byte_update = false;
+   if (manager_.bit_context_ >= 128) byte_update = true;
+ 
+-  manager_.UpdateContexts(bit);
++  { PROF(CTX); manager_.UpdateContexts(bit); }
+   if (byte_update) {
+-    if (print_transformer_loss_) AccumulateTransformerLoss();
++    { PROF(LOSS); if (print_transformer_loss_) AccumulateTransformerLoss(); }
++    PROF(CMO);  // ByteUpdates below; nested scopes for ppmd/transformer are subtracted
+     bracket_model_->ByteUpdate();
+ 
+     for (unsigned int i = 0; i < direct_models_.size(); ++i) {
+@@ -688,11 +756,18 @@ void Predictor::Perceive(int bit) {
+     }
+ 
+     if (byte_model_) {
+-      byte_model_->ByteUpdate();
++#ifdef FX2_PROF
++      uint64_t nested0 = __rdtsc();
++#endif
++      { PROF(PPMD); byte_model_->ByteUpdate(); }
+       if (ppmd_probs_writer_) WritePpmdProbs();
+ 
+       if (transformer_) {
+-        TransformerByteUpdate();
++        { PROF(TF); TransformerByteUpdate(); }
++#ifdef FX2_PROF
++        // the enclosing CMO scope also covers the two nested scopes above
++        fx2prof::acc[fx2prof::CMO] -= __rdtsc() - nested0;
++#endif
+       } else {
+         const std::valarray<float>& p = byte_model_->BytePredict();
+         for (unsigned int j = 0; j < 256; ++j) {
+@@ -707,10 +782,10 @@ void Predictor::Perceive(int bit) {
+       LoadTransformerProbs();
+     }
+   }
+-  byte_mixer_output = byte_mixer_->Predict()[0];
++  { PROF(BMIX); byte_mixer_output = byte_mixer_->Predict()[0]; }
+   lstmpr=Discretize(byte_mixer_output);
+   lstmex=byte_mixer_->ex;
+-  fxcm_model_->Perceive(bit);
++  { PROF(FXCM); fxcm_model_->Perceive(bit); }
+   if (byte_update)manager_.bit_context_ = 1;
+ }
+ 
+diff --git a/src/predictor.h b/src/predictor.h
+index 73d3a61..12d7c01 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -41,6 +41,10 @@
+ 
+ // Prints an error message to stderr and exits with a nonzero status.
+ [[noreturn]] void Fail(const char* fmt, ...);
++#ifdef FX2_PROF
++// [sub100mil prof patch] prints the per-model time breakdown to stderr.
++void Fx2ProfReport(uint64_t loop_ticks, double loop_seconds, unsigned long long bytes);
++#endif
+ 
+ struct PredictorOptions {
+   // Run only the ppmd model. Predict() returns the ppmd's bit prediction and
+diff --git a/src/runner.cpp b/src/runner.cpp
+index 049d681..eba2d47 100644
+--- a/src/runner.cpp
++++ b/src/runner.cpp
+@@ -27,9 +27,28 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <algorithm>
++#ifdef FX2_PROF
++#include <x86intrin.h>
++// [sub100mil prof patch] wall-clock phase timer printed to stderr.
++struct Fx2Phase {
++  const char* name; std::chrono::steady_clock::time_point t0;
++  explicit Fx2Phase(const char* n) : name(n), t0(std::chrono::steady_clock::now()) {}
++  ~Fx2Phase() {
++    fprintf(stderr, "\n== fx2prof phase %-28s %10.3f s\n", name,
++        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
++  }
++};
++#define PHASE(n) Fx2Phase fx2_phase_obj(n)
++#else
++#define PHASE(n)
++#endif
+ 
+ namespace {
+   const int kMinVocabFileSize = 10000;
++  // [sub100mil slice patch] Vocabulary bitmask of the full-enwik9 preprocessed
++  // stream (bit j of byte i = byte value 8*i+j), as printed by
++  // FX2_PRINT_VOCAB=1 ./cmix -e enwik9 ... on this build.
++  const unsigned char kEnwik9Vocab[32] = {0xe8,0x16,0x04,0x00,0xff,0xff,0xff,0x03,0x01,0xfc,0x0f,0xf9,0xfe,0xff,0xff,0x07,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+ }
+ 
+ int Help() {
+@@ -787,6 +806,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   fseek(data_in, 0L, SEEK_SET);
+ 
+   if (enable_preprocess) {
++    PHASE("WRT preprocess (encode)");
+     fprintf(stderr, "\rpreprocessing...");
+     fflush(stderr);
+     preprocessor::Encode(data_in, temp_out, *input_bytes, temp_path,
+@@ -814,6 +834,36 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+     temp_in.seekg(0, std::ios::beg);
+   }
+ 
++  // [sub100mil slice patch] Print the vocabulary bitmask when asked (used once on
++  // full enwik9 -e to obtain kEnwik9Vocab below).
++  if (getenv("FX2_PRINT_VOCAB")) {
++    int n = 0;
++    fprintf(stderr, "\nvocab mask:");
++    for (int i = 0; i < 32; ++i) {
++      unsigned c = 0;
++      for (int j = 0; j < 8; ++j) if (vocab[i * 8 + j]) { c |= 1u << j; ++n; }
++      fprintf(stderr, " 0x%02x,", c);
++    }
++    fprintf(stderr, " (%d bytes)\n", n);
++  }
++  // [sub100mil slice patch] The transformer's token ids are positions in the
++  // 205-byte enwik9 vocabulary. On any other input (e.g. a prefix slice) the
++  // vocabulary extracted from the input is a subset, so force the enwik9 one
++  // (it is written to the archive header, so the decoder needs no change).
++  // A no-op on enwik9 itself.
++  if (!transformer_weights.empty() && temp_bytes >= kMinVocabFileSize) {
++    int n = 0;
++    for (int i = 0; i < 256; ++i) {
++      if (vocab[i] && !((kEnwik9Vocab[i / 8] >> (i % 8)) & 1)) {
++        Fail("byte 0x%02x of the preprocessed input is not in the enwik9 "
++            "vocabulary the transformer was trained on", i);
++      }
++      vocab[i] = (kEnwik9Vocab[i / 8] >> (i % 8)) & 1;
++      n += vocab[i];
++    }
++    if (n != 205) Fail("kEnwik9Vocab has %d bytes, expected 205", n);
++  }
++
+   if (!extraction.save_ppmd_bytes.empty()) {
+     SavePpmdBytes(temp_path, temp_bytes, vocab, extraction.save_ppmd_bytes);
+   }
+@@ -842,14 +892,30 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   predictor_options.num_input_bytes = temp_bytes;
+   predictor_options.transformer_weights = transformer_weights;
+   predictor_options.save_transformer_probs = extraction.save_transformer_probs;
++#ifdef FX2_PROF
++  auto fx2_c0 = std::chrono::steady_clock::now();
++#endif
+   Predictor p(vocab, predictor_options);
++#ifdef FX2_PROF
++  fprintf(stderr, "\n== fx2prof phase %-28s %10.3f s\n", "model construction",
++      std::chrono::duration<double>(std::chrono::steady_clock::now() - fx2_c0).count());
++#endif
+   if (enable_preprocess && !extraction.ppmd_only && !extraction.transformer_only) {
++    PHASE("pretrain on dictionary");
+     // Pretraining only affects the models --ppmd-only and --transformer-only
+     // skip; neither the ppmd nor the transformer is pretrained, so their
+     // output is unchanged by skipping this.
+     preprocessor::Pretrain(&p, dictionary);
+   }
++#ifdef FX2_PROF
++  auto fx2_w0 = std::chrono::steady_clock::now();
++  uint64_t fx2_t0 = __rdtsc();
++#endif
+   Compress(temp_bytes, &temp_in, &data_out, output_bytes, &p);
++#ifdef FX2_PROF
++  Fx2ProfReport(__rdtsc() - fx2_t0, std::chrono::duration<double>(
++      std::chrono::steady_clock::now() - fx2_w0).count(), temp_bytes);
++#endif
+   temp_in.close();
+   data_out.close();
+   remove(temp_path.c_str());
