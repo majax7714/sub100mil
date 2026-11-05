@@ -88,3 +88,12 @@ scripts/bench.sh --method 'cm v1' --slice data/slices/enwik9_10M \
 BENCH_TMP=/mnt/scratch scripts/bench.sh --method 'cm v1' --slice data/raw/enwik9 \
   --comp './build/cm c {in} {out}' --decomp './build/cm d {in} {out}' --keep
 ```
+
+## fetch_refs.sh
+
+Clones the third-party reference compressors into `third_party/` (gitignored), pinned to exact commits. Idempotent.
+See docs/LANDSCAPE.md §6 for why these were chosen.
+
+```sh
+scripts/fetch_refs.sh
+```

@@ -24,6 +24,18 @@ too. Record L = 100,424,672 bytes (Sep 2026). A prize needs S < 99,420,425.
 - **Classify every experiment** as tuning, preprocessing, model addition or architectural in its build log
   entry, so we can see where our gains come from.
 - See [`docs/LANDSCAPE.md`](docs/LANDSCAPE.md) for the survey of prior entries and the candidate directions.
+
+### Plan of record (2026-11-04)
+- **Many cheap mechanism attempts beat throwing money at it.** We'd rather make many diverse, cheap experiments
+  that test different *mechanisms* than one expensive bet. Fast experiments on small slices come first.
+- **No dense training by default.** Record-scale transformer training (208–2,800 GPU-h) doesn't fit our budget
+  (see [`docs/COMPUTE.md`](docs/COMPUTE.md): about 74 RTX-5090-equivalent hours a month, free tiers only).
+  Training *small pieces* is fine: correction heads, mixers, specialists, fine-tunes.
+- **Use existing weights.** The record (fx2-cmix-transformer, the primary baseline because it's verified) and cmix-neif
+  (pending) both publish GPL weights. We build on frozen weights and put the effort into CPU-side mechanisms.
+  CPU time on the dev box is free, so it's the budget to spend.
+- **Every GPU spend needs a cited estimate first.** Before any GPU job, write down the estimated hours and dollars per
+  vendor, using the numbers in docs/COMPUTE.md (never estimate from memory), and get the user's OK.
 - **Third-party code** is fetched by script into gitignored `third_party/`, pinned to exact commits, and never
   vendored into the repo. Respect its license (most of the cmix lineage is GPL).
 
