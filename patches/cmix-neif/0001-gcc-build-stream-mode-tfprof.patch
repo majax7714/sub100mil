@@ -1,0 +1,282 @@
+--- a/src/runner.cpp
++++ b/src/runner.cpp
+@@ -336,7 +336,7 @@
+   run_mode::gram.Report("compress");
+   if (!MetablockInert()) {
+     metablock::mk.Report("compress");
+-    metablock::mk.ByteWacht("compress", pos);
++    if (!getenv("NEIF_STREAM_MODE")) metablock::mk.ByteWacht("compress", pos);  // sub100mil patch: a prefix may end inside the block
+   }
+   redirect_table::tab.Schluss();
+   alias_table::tab.Schluss();
+@@ -429,7 +429,7 @@
+   run_mode::gram.Report("decompress");
+   if (!MetablockInert()) {
+     metablock::mk.Report("decompress");
+-    metablock::mk.ByteWacht("decompress", output_length);
++    if (!getenv("NEIF_STREAM_MODE")) metablock::mk.ByteWacht("decompress", output_length);  // sub100mil patch
+   }
+   redirect_table::tab.Schluss();
+   alias_table::tab.Schluss();
+@@ -478,6 +478,15 @@
+   *input_bytes = ftell(data_in);
+   fseek(data_in, 0L, SEEK_SET);
+ 
++  // sub100mil patch: NEIF_STREAM_MODE=1 treats the input as an already
++  // preprocessed coder stream (as dumped by NEIF_DUMP_STREAM, or a prefix of
++  // it) and codes it without the WRT / metablock / ip transforms.
++  const bool sub100_stream_mode = getenv("NEIF_STREAM_MODE") != nullptr;
++  if (sub100_stream_mode) {
++    std::vector<char> b(1 << 20);
++    size_t n;
++    while ((n = fread(b.data(), 1, b.size(), data_in)) > 0) fwrite(b.data(), 1, n, temp_out);
++  } else
+   if (enable_preprocess) {
+     preprocessor::Encode(data_in, temp_out, *input_bytes, temp_path,
+         dictionary);
+@@ -487,6 +496,7 @@
+   fclose(data_in);
+   fclose(temp_out);
+ 
++  if (!sub100_stream_mode) {
+   if (!metablock_form::Pack(temp_path)) {
+     fprintf(stderr, "metablock codec: pack failed\n");
+     return false;
+@@ -496,6 +506,22 @@
+     fprintf(stderr, "ip pack: pack failed\n");
+     return false;
+   }
++  }
++
++  // sub100mil patch: NEIF_DUMP_STREAM=<path> writes the coder stream (exactly
++  // the bytes Compress() would code) to <path> and exits.
++  if (const char* dump = getenv("NEIF_DUMP_STREAM")) {
++    FILE* s = fopen(temp_path.c_str(), "rb");
++    FILE* d = fopen(dump, "wb");
++    if (!s || !d) { fprintf(stderr, "NEIF_DUMP_STREAM: open failed\n"); exit(1); }
++    std::vector<char> b(1 << 20);
++    size_t n;
++    while ((n = fread(b.data(), 1, b.size(), s)) > 0) fwrite(b.data(), 1, n, d);
++    fclose(s);
++    fclose(d);
++    fprintf(stderr, "NEIF_DUMP_STREAM: wrote %s\n", dump);
++    exit(0);
++  }
+ 
+   console_progress::PhaseEnd();   // "preprocessing enwik9" ends here
+ 
+@@ -575,6 +601,14 @@
+   }
+   malloc_trim(0);
+ 
++  // sub100mil patch: in stream mode the decoded coder stream is the output.
++  if (getenv("NEIF_STREAM_MODE") != nullptr) {
++    remove(output_path.c_str());
++    if (rename(temp_path.c_str(), output_path.c_str()) != 0) return false;
++    *output_bytes = getFileSize(output_path);
++    return true;
++  }
++
+   if (!ip_pack::Unpack(temp_path)) {
+     fprintf(stderr, "ip pack: unpack failed\n");
+     return false;
+--- a/src/tf1/tf1_engine.cpp
++++ b/src/tf1/tf1_engine.cpp
+@@ -29,6 +29,33 @@
+ #include "model.h"          // fp32 reference engine (Ivanov, cpp_infer/src)
+ #include "opt/model_opt.h"  // optimized engine  (Ivanov, cpp_infer/src/opt)
+ 
++#ifdef SUB100_TFPROF
++// sub100mil instrumentation patch: wall time (rdtsc, calibrated against
++// CLOCK_MONOTONIC) and counts of transformer steps, printed to stderr at exit.
++#include <time.h>
++#include <x86intrin.h>
++namespace sub100_tfprof {
++static unsigned long long g_ticks[2], g_n[2], g_ins;  // [0]=skip-output, [1]=full
++static double g_t0; static unsigned long long g_tsc0;
++static double now() { timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + 1e-9 * ts.tv_nsec; }
++struct Reporter {
++  Reporter() { g_t0 = now(); g_tsc0 = __rdtsc(); }
++  ~Reporter() {
++    const double hz = (double)(__rdtsc() - g_tsc0) / (now() - g_t0);
++    const unsigned long long n = g_n[0] + g_n[1];
++    const double sec = (double)(g_ticks[0] + g_ticks[1]) / hz;
++    fprintf(stderr, "\nSUB100_TFPROF tsc_hz=%.0f steps=%llu (full %llu, kv-only %llu, inserted %llu) "
++            "tf_seconds=%.3f process_seconds=%.3f us_per_step=%.2f us_full=%.2f us_kvonly=%.2f\n",
++            hz, n, g_n[1], g_n[0], g_ins, sec, now() - g_t0, n ? 1e6 * sec / n : 0.0,
++            g_n[1] ? 1e6 * g_ticks[1] / hz / g_n[1] : 0.0, g_n[0] ? 1e6 * g_ticks[0] / hz / g_n[0] : 0.0);
++    if (fx2::opt::prof_enabled()) fx2::opt::prof_print(1.0, (long)n);
++    fflush(stdout);
++  }
++};
++static Reporter g_rep;
++}
++#endif
++
+ namespace transformer {
+ 
+ namespace {
+@@ -259,7 +286,15 @@
+     ch.prev2 = pk_prev2;
+     ch.match_byte = inserted ? 208 : m_hot;
+     ch.match_class = inserted ? 0 : (m_class & 15);
++#ifdef SUB100_TFPROF
++    const unsigned long long sub100_t0 = __rdtsc();
++#endif
+     opt->step((uint8_t)tok, prior, out, ch);
++#ifdef SUB100_TFPROF
++    sub100_tfprof::g_ticks[gelesen ? 1 : 0] += __rdtsc() - sub100_t0;
++    ++sub100_tfprof::g_n[gelesen ? 1 : 0];
++    if (inserted) ++sub100_tfprof::g_ins;
++#endif
+     pk_prev2 = pk_prev1;
+     pk_prev1 = tok;
+     ++pk_fed;
+--- a/src/tf1/tf1_prompt.cpp
++++ b/src/tf1/tf1_prompt.cpp
+@@ -270,7 +270,7 @@
+   // The training side discards a digit run whose end falls on the last article
+   // position.  In the stream that position always carries a separator token,
+   // i.e. no digit; the guard checks it instead of assuming it.
+-  if (last_sent_pos_ >= 0 && last_sent_pos_ >= pos_ - 1) {
++  if (last_sent_pos_ >= 0 && last_sent_pos_ >= pos_ - 1 && !getenv("NEIF_STREAM_MODE")) {  // sub100mil patch: a prefix may end in a digit run
+     transformer::Fail("prompt: sentinel %lld on the last article position (%lld)", last_sent_pos_,
+         pos_ - 1);
+   }
+--- a/src/tf1/opt/model_opt.cpp
++++ b/src/tf1/opt/model_opt.cpp
+@@ -294,6 +294,10 @@
+     const size_t kv_sz =
+         (kind == AttnKind::KVF32 ? sizeof(AttnKVF32) : sizeof(AttnKV)) * NVAN;
+     spool.alloc(kda_sz + kv_sz);
++#ifdef SUB100_TFPROF
++    std::fprintf(stderr, "SUB100_TFPROF weight_stream_bytes=%zu kda_state_bytes=%zu kv_bytes=%zu\n",
++                 M.stream_bytes, kda_sz, kv_sz);
++#endif
+     spool.trim(kda_sz + kv_sz);
+     kst = reinterpret_cast<KdaState*>(spool.p);
+     if (kind == AttnKind::KVF32)
+--- /dev/null
++++ b/makefile.gcc
+@@ -0,0 +1,121 @@
++# makefile.gcc - g++ port of cmix-neif-1.0's makefile (sub100mil, not upstream).
++#
++# Same translation groups and the same FP-model split as the clang makefile:
++#   fast  units: clang -ffp-model=fast -mrecip=none   -> -ffast-math -ffp-contract=fast -mrecip=none
++#   precise units: clang -ffp-model=precise -ffp-contract=off -> (gcc default IEEE) -ffp-contract=off
++# Dropped (clang/lld only): -fno-direct-access-external-data, -fuse-ld=lld-18,
++# -Wl,--icf=all, the encoder_split.lds linker script (only needed for the
++# packer's decompressor cut), clang PGO profdata.  -mno-daz-ftz keeps gcc from
++# linking crtfastmath.o (FTZ/DAZ), which the clang build also does not do.
++# -U__FAST_MATH__ stops glibc math-vector.h from declaring libmvec SIMD
++# variants (gcc otherwise vectorises log/exp into libmvec calls and emits
++# vrcpps/vrsqrt); clang never uses those declarations.  g++ 15 treats
++# -mrecip=none like the default, so -mrecip=!all is used.  One scalar
++# 1/sqrtf (rsqrtss + Newton step, in LstmLayer) remains: gcc emits it under
++# -funsafe-math-optimizations regardless of -mrecip.  It is deterministic on
++# one CPU; it only matters for decoding on a different CPU vendor.
++# AVX2 only: -march=x86-64-v3 -mtune=znver2, never -march=native.
++#
++#   make -f makefile.gcc            plain -O3/-flto build (no PGO)  -> ./cmix
++#   make -f makefile.gcc PGO=gen    instrumented build
++#   make -f makefile.gcc PGO=use    build using ./pgo_gcc profile
++#   make -f makefile.gcc PROF=1     adds -pg for gprof (no LTO)
++
++CXX      ?= g++
++DEFS     := -DSEED=923 -DUPDATE_LIMIT=3000 -DNDEBUG $(XDEFS)
++ifeq ($(AUX),1)
++  DEFS += -DAUX_BUILD=1
++endif
++ARCH     := -march=x86-64-v3 -mtune=znver2
++COMMON   := -m64 -std=c++17 $(ARCH) -fno-pie -fno-exceptions -fno-unwind-tables \
++            -fno-asynchronous-unwind-tables -fdata-sections -ffunction-sections -w
++FASTFP   := -ffast-math -ffp-contract=fast -mrecip=!all -U__FAST_MATH__
++PRECFP   := -ffp-contract=off -fno-math-errno -mrecip=!all
++BASE     := $(DEFS) $(COMMON) -fno-threadsafe-statics -fno-rtti -fvisibility=hidden -fmerge-all-constants -fno-unroll-loops
++
++LTO      := -flto=auto
++EXTRA    :=
++ifeq ($(PGO),gen)
++  EXTRA  += -fprofile-generate=$(CURDIR)/pgo_gcc -fprofile-update=single
++endif
++ifeq ($(PGO),use)
++  EXTRA  += -fprofile-use=$(CURDIR)/pgo_gcc -fprofile-partial-training -Wno-missing-profile
++endif
++ifeq ($(PROF),1)
++  EXTRA  += -pg
++  LTO    :=
++endif
++
++FAST_FLAGS := $(BASE) $(FASTFP) -O3 $(LTO) $(EXTRA)
++SLOW_FLAGS := $(BASE) $(FASTFP) -Os $(EXTRA)
++COLD_FLAGS := $(BASE) $(FASTFP) -Os $(EXTRA)
++PREC_O2    := $(DEFS) $(COMMON) -fno-rtti -fvisibility=hidden $(PRECFP) -O2 -fno-builtin $(EXTRA)
++PREC_O3    := $(DEFS) $(COMMON) -fno-rtti -fvisibility=hidden $(PRECFP) -O3 -fno-builtin $(EXTRA)
++PREC_OS    := $(DEFS) $(COMMON) -fno-rtti -fvisibility=hidden $(PRECFP) -Os -fno-builtin $(EXTRA)
++TF1_FLAGS  := $(DEFS) $(COMMON) -fno-rtti -fvisibility=hidden $(PRECFP) -O3 $(EXTRA)
++TF1_OS     := $(DEFS) $(COMMON) -fno-rtti -fvisibility=hidden $(PRECFP) -Os $(EXTRA)
++
++FAST_SRC := src/coder/decoder.cpp src/coder/encoder.cpp src/context-manager.cpp src/contexts/bit-context.cpp \
++  src/contexts/bracket-context.cpp src/contexts/combined-context.cpp src/contexts/context-hash.cpp \
++  src/contexts/indirect-hash.cpp src/contexts/interval-hash.cpp src/contexts/interval.cpp src/contexts/sparse.cpp \
++  src/models/bracket.cpp src/models/byte-model.cpp src/models/direct-hash.cpp src/models/direct.cpp \
++  src/models/indirect.cpp src/models/match.cpp src/models/grammar-match.cpp src/models/fxcmv1.cpp src/models/ppmd.cpp \
++  src/states/nonstationary.cpp src/states/run-map.cpp src/mixer/byte-mixer.cpp src/mixer/mixer-input.cpp \
++  src/mixer/mixer.cpp src/mixer/sigmoid.cpp src/mixer/sse.cpp src/predictor.cpp
++SLOW_SRC := src/preprocess/preprocessor.cpp src/preprocess/dictionary.cpp
++COLD_SRC := src/r1_reorder_transform.cpp src/runner.cpp src/glibc_compat.cpp src/preprocess/dict_derive.cpp
++TF1_SRC  := src/tf1/tf1_engine.cpp src/tf1/kernels.cpp src/tf1/model.cpp src/tf1/opt/attn.cpp src/tf1/opt/glue.cpp \
++  src/tf1/opt/kda.cpp src/tf1/opt/qmat_dense.cpp src/tf1/opt/qmat_sparse.cpp src/tf1/opt/model_opt.cpp \
++  src/tf1/tf1_z3.cpp src/tf1/tf1_prompt.cpp src/tf1/tf1_gate.cpp
++TF1_OSRC := src/tf1/weights_io.cpp src/tf1/weights_io_compressed.cpp src/tf1/opt/arena_build.cpp
++
++O := obj
++obj = $(addprefix $(O)/,$(subst /,_,$(1:.cpp=.o)))
++
++FAST_OBJ := $(call obj,$(FAST_SRC))
++SLOW_OBJ := $(call obj,$(SLOW_SRC))
++COLD_OBJ := $(call obj,$(COLD_SRC))
++TF1_OBJ  := $(call obj,$(TF1_SRC))
++TF1_OOBJ := $(call obj,$(TF1_OSRC))
++PREC_OBJ := $(O)/src_detmath.o $(O)/src_fast_math_vec.o $(O)/src_optimizer_vec.o $(O)/src_bit_head.o \
++            $(O)/src_adaptive_depth.o $(O)/src_word_label.o
++ALL_OBJ  := $(FAST_OBJ) $(SLOW_OBJ) $(COLD_OBJ) $(TF1_OBJ) $(TF1_OOBJ) $(PREC_OBJ)
++
++LFLAGS := -m64 -no-pie -Wl,--gc-sections -Wl,-z,norelro -Wl,--version-script=runtime_exports.map \
++          -Wl,--as-needed -Wl,--build-id=none -mno-daz-ftz
++
++# OUT names the binary; the build helper is
++#   make -f makefile.gcc OUT=cmix_aux O=obj_aux AUX=1
++OUT ?= cmix
++$(OUT): $(ALL_OBJ)
++	$(CXX) $(FAST_FLAGS) $(LFLAGS) $(ALL_OBJ) -o $@
++
++define rule
++$(call obj,$(1)): $(1) | $(O)
++	$$(CXX) $(2) -c $$< -o $$@
++endef
++# mixer-input.cpp holds a build check (eps != min_ || (1 - eps) != max_) that
++# gcc's reassociation under -ffast-math folds differently from clang's, so it
++# aborts at start-up although the values agree.  Compile it without
++# associative/reciprocal math; the hot MixerInput code is inline in its header.
++FAST_SRC_STRICT := src/mixer/mixer-input.cpp
++$(foreach s,$(filter-out $(FAST_SRC_STRICT),$(FAST_SRC)),$(eval $(call rule,$(s),$$(FAST_FLAGS))))
++$(foreach s,$(FAST_SRC_STRICT),$(eval $(call rule,$(s),$$(FAST_FLAGS) -fno-associative-math -fno-reciprocal-math)))
++$(foreach s,$(SLOW_SRC),$(eval $(call rule,$(s),$$(SLOW_FLAGS))))
++$(foreach s,$(COLD_SRC),$(eval $(call rule,$(s),$$(COLD_FLAGS))))
++$(foreach s,$(TF1_SRC),$(eval $(call rule,$(s),$$(TF1_FLAGS))))
++$(foreach s,$(TF1_OSRC),$(eval $(call rule,$(s),$$(TF1_OS))))
++$(eval $(call rule,src/detmath.cpp,$$(PREC_O2)))
++$(eval $(call rule,src/fast_math_vec.cpp,$$(PREC_O3)))
++$(eval $(call rule,src/optimizer_vec.cpp,$$(PREC_O3)))
++$(eval $(call rule,src/bit_head.cpp,$$(PREC_O3)))
++$(eval $(call rule,src/adaptive_depth.cpp,$$(PREC_O2)))
++$(eval $(call rule,src/word_label.cpp,$$(PREC_OS)))
++
++$(O):
++	mkdir -p $(O)
++
++clean:
++	rm -rf $(O) cmix
++
++.PHONY: clean
