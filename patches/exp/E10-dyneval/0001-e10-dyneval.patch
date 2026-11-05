@@ -1,0 +1,556 @@
+diff --git a/cpp_infer/src/opt/arena_build.cpp b/cpp_infer/src/opt/arena_build.cpp
+index 03d4936..4862429 100644
+--- a/cpp_infer/src/opt/arena_build.cpp
++++ b/cpp_infer/src/opt/arena_build.cpp
+@@ -198,6 +198,23 @@ void OptModel::load(const char* weights_path) {
+ 
+     mlp[l].up = qsite(b + "mlp.up", DMLP, D, true);
+     mlp[l].down = qsp4(b + "mlp.down", DMLP, &mlp[l].down_s_act);
++    {  // [sub100mil E10] int8 copies for the dyneval MLP backward
++      const WTensor& uq = wf.get(b + "mlp.up.weight.q", DT_I8, {DMLP, D});
++      const WTensor& us = wf.get(b + "mlp.up.weight.scale", DT_BF16, {DMLP});
++      const WTensor& dq = wf.get(b + "mlp.down.weight.q", DT_I8, {D, DMLP});
++      const WTensor& ds = wf.get(b + "mlp.down.weight.scale", DT_BF16, {D});
++      e10_up8[l].assign(uq.i8(), uq.i8() + size_t(DMLP) * D);
++      e10_up_ws[l].resize(DMLP);
++      for (int i = 0; i < DMLP; i++)
++        e10_up_ws[l][i] = bf16_to_f32(us.bf16_bits()[i]);
++      e10_dnT8[l].resize(size_t(DMLP) * D);
++      for (int o = 0; o < D; o++)
++        for (int i = 0; i < DMLP; i++)
++          e10_dnT8[l][size_t(i) * D + o] = dq.i8()[size_t(o) * DMLP + i];
++      e10_dn_ws[l].resize(D);
++      for (int o = 0; o < D; o++)
++        e10_dn_ws[l][o] = bf16_to_f32(ds.bf16_bits()[o]);
++    }
+   }
+   if (ki != 9 || vi != 3) die("layer pattern mismatch");
+ 
+diff --git a/cpp_infer/src/opt/arena_build.h b/cpp_infer/src/opt/arena_build.h
+index 0ad32c5..cf56362 100644
+--- a/cpp_infer/src/opt/arena_build.h
++++ b/cpp_infer/src/opt/arena_build.h
+@@ -84,6 +84,11 @@ struct OptModel {
+   MlpArenas mlp[NL];
+   QSite unembed;         // 205x192 (rows_padded 208), biased
+   std::vector<float> unembed_f32;  // [sub100mil E2] float copy [205][192]
++  // [sub100mil E10] MLP weights for the dyneval backward, per layer:
++  // up int8 row-major [768][192] + bf16 weight scales [768] (as f32);
++  // down transposed int8 [768][192] (row i = column i of W_down) + scales [192]
++  std::vector<int8_t> e10_up8[NL], e10_dnT8[NL];
++  std::vector<float> e10_up_ws[NL], e10_dn_ws[NL];
+ 
+   int layer2kimi[NL] = {};
+   int layer2van[NL] = {};
+diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
+index ba8c2ab..0b35143 100644
+--- a/cpp_infer/src/opt/model_opt.cpp
++++ b/cpp_infer/src/opt/model_opt.cpp
+@@ -446,6 +446,292 @@ struct TransformerOptImpl {
+     }
+   }
+ 
++  // ---- [sub100mil E10] dynamic evaluation (see model_opt.h E10Config) ----
++  E10Config e10;
++  int cur_l = 0;
++  float e10_bt = 1.0f;  // beta^t (Adam bias correction)
++  // adapted parameters [l][i]: branch gains are multipliers (init 1), biases
++  // and hidden-neuron gain deltas start at 0
++  alignas(64) float e10_ga[NL][D], e10_gm[NL][D];
++  alignas(64) float e10_ba[NL][D] = {}, e10_bm[NL][D] = {};
++  alignas(64) float e10_vga[NL][D] = {}, e10_vgm[NL][D] = {};
++  alignas(64) float e10_vba[NL][D] = {}, e10_vbm[NL][D] = {};
++  alignas(64) float e10_gh[NL][DMLP] = {}, e10_vgh[NL][DMLP] = {};
++  // forward caches of the last step
++  alignas(64) float e10_ya[NL][D] = {}, e10_ym[NL][D] = {};
++  alignas(64) float e10_xnm[NL][D] = {};
++  float e10_rinvm[NL] = {};
++  alignas(64) uint8_t e10_q[NL][DMLP] = {};
++  alignas(64) uint16_t e10_idx[NL][DMLP + 16] = {};
++  int e10_nnz[NL] = {};
++  alignas(64) float e10_xnf[D] = {}, e10_lc[208] = {}, e10_p[208] = {};
++  float e10_rinvf = 0.0f;
++  // sites bit5: low-rank residual branch per layer, x += B (A xn_mlp)
++  // (A [r][D] small deterministic init, B [D][r] zero init)
++  static constexpr int E10_RMAX = 16;
++  std::vector<float> e10_A, e10_B, e10_vA, e10_vB;  // [NL][r][D], [NL][D][r]
++  alignas(64) float e10_u[NL][E10_RMAX] = {};
++
++  void e10_set(const E10Config& c) {
++    e10 = c;
++    if (e10.lmin < 0) e10.lmin = 0;
++    if (e10.mlpbk < 0) e10.mlpbk = 0;
++    if (e10.mlpbk > NL - e10.lmin) e10.mlpbk = NL - e10.lmin;
++    for (int l = 0; l < NL; l++)
++      for (int i = 0; i < D; i++) e10_ga[l][i] = e10_gm[l][i] = 1.0f;
++    if (e10.rank < 0) e10.rank = 0;
++    if (e10.rank > E10_RMAX) e10.rank = E10_RMAX;
++    if (e10.sites & 32) {
++      const int r = e10.rank;
++      e10_A.assign(size_t(NL) * r * D, 0.0f);
++      e10_B.assign(size_t(NL) * D * r, 0.0f);
++      e10_vA.assign(e10_A.size(), 0.0f);
++      e10_vB.assign(e10_B.size(), 0.0f);
++      uint32_t st = 0x12345678u;  // fixed LCG: uniform in [-a, a]
++      const float a = e10.ainit;
++      for (size_t k = 0; k < e10_A.size(); k++) {
++        st = st * 1664525u + 1013904223u;
++        e10_A[k] = a * (float(st >> 8) * (2.0f / 16777216.0f) - 1.0f);
++      }
++    }
++  }
++  bool e10_lora(int l) const {
++    return e10.on && (e10.sites & 32) && l >= e10.lmin && e10.rank > 0;
++  }
++  bool e10_act(int l) const { return e10.on && l >= e10.lmin; }
++  bool e10_bk(int l) const { return e10.on && l >= NL - e10.mlpbk; }
++
++  // replaces qgemv_add(m, q5, x) for the attention/KDA output projection
++  void e10_attn_out(const QDense& m) {
++    if (!e10_act(cur_l)) {
++      qgemv_add(m, q5, x);
++      return;
++    }
++    float* y = e10_ya[cur_l];
++    std::memset(y, 0, sizeof(float) * D);
++    qgemv_add(m, q5, y);
++    const float* g = e10_ga[cur_l];
++    const float* b = e10_ba[cur_l];
++    for (int i = 0; i < D; i++) x[i] += g[i] * y[i] + b[i];
++  }
++
++  // fixed-order dot of an int8[192] row with a float[192] vector
++  static float e10_dot_i8(const int8_t* w, const float* v) {
++    __m256 a0 = _mm256_setzero_ps(), a1 = a0, a2 = a0;
++    for (int j = 0; j < D; j += 24) {
++      const __m256 w0 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
++          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(w + j))));
++      const __m256 w1 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
++          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(w + j + 8))));
++      const __m256 w2 = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(
++          _mm_loadl_epi64(reinterpret_cast<const __m128i*>(w + j + 16))));
++      a0 = _mm256_fmadd_ps(w0, _mm256_loadu_ps(v + j), a0);
++      a1 = _mm256_fmadd_ps(w1, _mm256_loadu_ps(v + j + 8), a1);
++      a2 = _mm256_fmadd_ps(w2, _mm256_loadu_ps(v + j + 16), a2);
++    }
++    return hsum8(_mm256_add_ps(_mm256_add_ps(a0, a1), a2));
++  }
++
++  // out[0..192) = sum_k c[k] * rows[idx[k]][0..192) (int8 rows), fixed order
++  static void e10_axpy_rows(const int8_t* rows, const uint16_t* idx,
++                            const float* c, int n, float* out) {
++    for (int half = 0; half < 2; half++) {
++      const int j0 = half * 96;
++      __m256 a[12];
++      for (int r = 0; r < 12; r++) a[r] = _mm256_setzero_ps();
++      for (int k = 0; k < n; k++) {
++        const int8_t* row = rows + size_t(idx[k]) * D + j0;
++        const __m256 cv = _mm256_set1_ps(c[k]);
++        for (int r = 0; r < 12; r++)
++          a[r] = _mm256_fmadd_ps(
++              _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(
++                  reinterpret_cast<const __m128i*>(row + 8 * r)))),
++              cv, a[r]);
++      }
++      for (int r = 0; r < 12; r++) _mm256_storeu_ps(out + j0 + 8 * r, a[r]);
++    }
++  }
++
++  // MLP down projection into y (pre branch gain), plus the hidden-gain
++  // correction, then x += gm*y + bm
++  void e10_mlp_out(int l, int nnz) {
++    MlpArenas& mm = M.mlp[l];
++    float* y = e10_ym[l];
++    std::memset(y, 0, sizeof(float) * D);
++    if (nnz > DOWN_DENSE_NNZ)
++      qsparse4_dense_add(mm.down, q768, y);
++    else
++      qsparse4_add(mm.down, q768, idx768, nnz, y);
++    if (e10_bk(l) && (e10.sites & 16)) {
++      alignas(64) float c[DMLP];
++      const float sd = mm.down_s_act;
++      for (int k = 0; k < nnz; k++)
++        c[k] = float(q768[idx768[k]]) * sd * e10_gh[l][idx768[k]];
++      alignas(64) float dy[D];
++      e10_axpy_rows(M.e10_dnT8[l].data(), idx768, c, nnz, dy);
++      const float* ws = M.e10_dn_ws[l].data();
++      for (int o = 0; o < D; o++) y[o] += dy[o] * ws[o];
++    }
++    const float* g = e10_gm[l];
++    const float* b = e10_bm[l];
++    for (int i = 0; i < D; i++) x[i] += g[i] * y[i] + b[i];
++    if (e10_lora(l)) {
++      const int r = e10.rank;
++      const float* A = e10_A.data() + size_t(l) * r * D;
++      const float* B = e10_B.data() + size_t(l) * D * r;
++      float* u = e10_u[l];
++      for (int k = 0; k < r; k++) {
++        float acc = 0.0f;
++        for (int i = 0; i < D; i++) acc += A[size_t(k) * D + i] * e10_xnm[l][i];
++        u[k] = acc;
++      }
++      for (int i = 0; i < D; i++) {
++        float acc = 0.0f;
++        for (int k = 0; k < r; k++) acc += B[size_t(i) * r + k] * u[k];
++        x[i] += acc;
++      }
++    }
++  }
++
++  // grad of the MLP block's input x given dy = grad of its down output y;
++  // ghg[k] (nullable) = grad of the hidden gain of nonzero neuron k
++  void e10_mlp_back(int l, const float* dy, float* dx, float* ghg) {
++    const int8_t* dT = M.e10_dnT8[l].data();
++    const float* wsd = M.e10_dn_ws[l].data();
++    const float* wsu = M.e10_up_ws[l].data();
++    const float sd = M.mlp[l].down_s_act;
++    alignas(64) float gf[D];
++    for (int o = 0; o < D; o++) gf[o] = dy[o] * wsd[o];
++    const int nnz = e10_nnz[l];
++    const uint16_t* idx = e10_idx[l];
++    const uint8_t* q = e10_q[l];
++    alignas(64) float c[DMLP];
++    for (int k = 0; k < nnz; k++) {
++      const int i = idx[k];
++      const float dhp = e10_dot_i8(dT + size_t(i) * D, gf);  // dL/dh'_i
++      const float h = float(q[i]) * sd;
++      if (ghg) ghg[k] = dhp * h;
++      const float dh = dhp * (1.0f + e10_gh[l][i]);
++      c[k] = 2.0f * std::sqrt(h) * dh * wsu[i];  // relu^2' (STE), up scale
++    }
++    alignas(64) float dxn[D];
++    e10_axpy_rows(M.e10_up8[l].data(), idx, c, nnz, dxn);
++    const float* xnm = e10_xnm[l];
++    float m = 0.0f;
++    for (int i = 0; i < D; i++) m += dxn[i] * xnm[i];
++    m *= (1.0f / float(D));
++    const float r = e10_rinvm[l];
++    for (int i = 0; i < D; i++) dx[i] = r * (dxn[i] - xnm[i] * m);
++  }
++
++  void e10_step(float* th, float* v, const float* g, int n, float lr,
++                float init, float bc) {
++    if (e10.opt == 0) {
++      for (int i = 0; i < n; i++) th[i] -= lr * g[i];
++    } else {
++      const float b = e10.beta, b1 = 1.0f - e10.beta, eps = e10.eps;
++      for (int i = 0; i < n; i++) {
++        v[i] = b * v[i] + b1 * (g[i] * g[i]);
++        th[i] -= lr * g[i] / (std::sqrt(v[i] * bc) + eps);
++      }
++    }
++    if (e10.decay > 0.0f) {
++      const float k = 1.0f - e10.decay;
++      for (int i = 0; i < n; i++) th[i] = init + (th[i] - init) * k;
++    }
++  }
++
++  void e10_update(uint8_t y) {
++    if (!e10.on) return;
++    e10_bt *= e10.beta;
++    const float bc = 1.0f / (1.0f - e10_bt);
++    alignas(64) float dl[208];
++    for (int o = 0; o < V; o++) {
++      const float d = e10_p[o] - (o == int(y) ? 1.0f : 0.0f);
++      const float c = e10_lc[o] * (1.0f / 15.0f);
++      dl[o] = d * (1.0f - c * c);
++    }
++    dl[205] = dl[206] = dl[207] = 0.0f;
++    alignas(64) float gxn[D];
++    const float* U = M.unembed_f32.data();
++    for (int half = 0; half < 2; half++) {
++      const int i0 = half * 96;
++      __m256 a[12];
++      for (int r = 0; r < 12; r++) a[r] = _mm256_setzero_ps();
++      for (int o = 0; o < V; o++) {
++        const float* row = U + size_t(o) * D + i0;
++        const __m256 g = _mm256_set1_ps(dl[o]);
++        for (int r = 0; r < 12; r++)
++          a[r] = _mm256_fmadd_ps(_mm256_loadu_ps(row + 8 * r), g, a[r]);
++      }
++      for (int r = 0; r < 12; r++) _mm256_store_ps(gxn + i0 + 8 * r, a[r]);
++    }
++    float m = 0.0f;
++    for (int i = 0; i < D; i++) m += gxn[i] * e10_xnf[i];
++    m *= (1.0f / float(D));
++    alignas(64) float G[D], gg[D], dy[D], dxm[D];
++    alignas(64) float ghg[DMLP];
++    alignas(64) float Gs[6][D] = {};
++    for (int i = 0; i < D; i++) G[i] = e10_rinvf * (gxn[i] - e10_xnf[i] * m);
++    const int sites = e10.sites;
++    for (int l = NL - 1; l >= e10.lmin; l--) {
++      if (l <= 5)
++        for (int i = 0; i < D; i++) G[i] += Gs[l][i];
++      const bool bk = e10_bk(l);
++      if (bk) {
++        for (int i = 0; i < D; i++) dy[i] = e10_gm[l][i] * G[i];
++        e10_mlp_back(l, dy, dxm, (sites & 16) ? ghg : nullptr);
++      }
++      if (sites & 2) {
++        for (int i = 0; i < D; i++) gg[i] = G[i] * e10_ym[l][i];
++        e10_step(e10_gm[l], e10_vgm[l], gg, D, e10.lr, 1.0f, bc);
++      }
++      if (sites & 8) e10_step(e10_bm[l], e10_vbm[l], G, D, e10.lrb, 0.0f, bc);
++      if (e10_lora(l)) {
++        const int r = e10.rank;
++        float* A = e10_A.data() + size_t(l) * r * D;
++        float* B = e10_B.data() + size_t(l) * D * r;
++        const float* u = e10_u[l];
++        alignas(64) float bg[E10_RMAX] = {};  // B^T G (pre-update B)
++        for (int i = 0; i < D; i++)
++          for (int k = 0; k < r; k++) bg[k] += B[size_t(i) * r + k] * G[i];
++        alignas(64) float gB[D * E10_RMAX];
++        for (int i = 0; i < D; i++)
++          for (int k = 0; k < r; k++) gB[i * r + k] = G[i] * u[k];
++        e10_step(B, e10_vB.data() + size_t(l) * D * r, gB, D * r, e10.lrl,
++                 0.0f, bc);
++        alignas(64) float gA[D];
++        for (int k = 0; k < r; k++) {
++          for (int i = 0; i < D; i++) gA[i] = bg[k] * e10_xnm[l][i];
++          e10_step(A + size_t(k) * D, e10_vA.data() + size_t(l) * r * D + k * D,
++                   gA, D, e10.lrl, 0.0f, bc);
++        }
++      }
++      if (bk && (sites & 16)) {  // sparse step over the active neurons
++        const int nnz = e10_nnz[l];
++        const uint16_t* idx = e10_idx[l];
++        for (int k = 0; k < nnz; k++) {
++          const int i = idx[k];
++          e10_step(&e10_gh[l][i], &e10_vgh[l][i], &ghg[k], 1, e10.lrh, 0.0f,
++                   bc);
++        }
++      }
++      if (bk)
++        for (int i = 0; i < D; i++) G[i] += dxm[i];
++      if (sites & 1) {
++        for (int i = 0; i < D; i++) gg[i] = G[i] * e10_ya[l][i];
++        e10_step(e10_ga[l], e10_vga[l], gg, D, e10.lr, 1.0f, bc);
++      }
++      if (sites & 4) e10_step(e10_ba[l], e10_vba[l], G, D, e10.lrb, 0.0f, bc);
++      const float r = M.rsc[l];
++      for (int i = 0; i < D; i++) G[i] *= r;
++      if (l >= 6) {
++        const float w = M.skip_w[l - 6];
++        for (int i = 0; i < D; i++) Gs[11 - l][i] += w * G[i];
++      }
++    }
++  }
++
+   explicit TransformerOptImpl(const char* path, AttnKind k) : kind(k) {
+     M.load(path);
+     const size_t kda_sz = sizeof(KdaState) * 9;
+@@ -538,7 +824,7 @@ struct TransformerOptImpl {
+     }
+     {
+       PSCOPE(PS_MM_KOP);
+-      qgemv_add(L.op.m, q5, x);
++      e10_attn_out(L.op.m);
+     }
+   }
+ 
+@@ -643,7 +929,7 @@ struct TransformerOptImpl {
+     }
+     {
+       PSCOPE(PS_MM_VOP);
+-      qgemv_add(L.op.m, q5, x);
++      e10_attn_out(L.op.m);
+     }
+   }
+ 
+@@ -653,12 +939,29 @@ struct TransformerOptImpl {
+       PSCOPE(PS_EL_NQ_MLP);
+       rms_norm_quant192(x, xn, mm.up.s_act, q5);
+     }
++    if (e10_bk(l) || e10_lora(l)) {  // [sub100mil E10] cache the MLP norm
++      float sx = 0.0f, sn = 0.0f;
++      for (int i = 0; i < D; i++) {
++        sx += x[i] * x[i];
++        sn += xn[i] * xn[i];
++      }
++      e10_rinvm[l] = sx > 0.0f ? std::sqrt(sn / sx) : 0.0f;
++      std::memcpy(e10_xnm[l], xn, sizeof(float) * D);
++    }
+     int nnz;
+     {
+       PSCOPE(PS_MM_MLP_UP);
+       nnz = qgemv_relu2q(mm.up.m, q5, mm.down_s_act, q768, idx768);
+     }
+-    {
++    if (e10_bk(l)) {
++      e10_nnz[l] = nnz;
++      std::memcpy(e10_q[l], q768, DMLP);
++      std::memcpy(e10_idx[l], idx768, sizeof(uint16_t) * nnz);
++    }
++    if (e10_act(l)) {
++      PSCOPE(PS_MM_MLP_DOWN);
++      e10_mlp_out(l, nnz);
++    } else {
+       PSCOPE(PS_MM_MLP_DOWN);
+       if (nnz > DOWN_DENSE_NNZ)
+         qsparse4_dense_add(mm.down, q768, x);
+@@ -699,6 +1002,7 @@ struct TransformerOptImpl {
+         if (l >= 6) add_scaled192(x, M.skip_w[l - 6], skip_store[11 - l]);
+         axpby_tok192(M.rsc[l], x, M.tec[l], tok);
+       }
++      cur_l = l;
+       if (OptModel::KIMI_L[l])
+         kimi_layer(M.layer2kimi[l]);
+       else
+@@ -725,6 +1029,17 @@ struct TransformerOptImpl {
+       head_softcap_softmax(logits, probs208);
+       std::memcpy(probs_out, probs208, sizeof(float) * V);
+     }
++    if (e10.on) {  // [sub100mil E10] cache the head for e10_update
++      float sx = 0.0f, sn = 0.0f;
++      for (int i = 0; i < D; i++) {
++        sx += x[i] * x[i];
++        sn += xn[i] * xn[i];
++      }
++      e10_rinvf = sx > 0.0f ? std::sqrt(sn / sx) : 0.0f;
++      std::memcpy(e10_xnf, xn, sizeof(float) * D);
++      std::memcpy(e10_lc, logits, sizeof(float) * 208);
++      std::memcpy(e10_p, probs208, sizeof(float) * 208);
++    }
+     if (e2.on()) e2_head();
+     t++;
+   }
+@@ -759,6 +1074,8 @@ AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
+ void TransformerOpt::e2_set(const E2Config& cfg) { impl->e2_set(cfg); }
+ const float* TransformerOpt::e2_probs() const { return impl->fw_probs208; }
+ void TransformerOpt::e2_update(uint8_t target) { impl->e2_update(target); }
++void TransformerOpt::e10_set(const E10Config& cfg) { impl->e10_set(cfg); }
++void TransformerOpt::e10_update(uint8_t target) { impl->e10_update(target); }
+ 
+ }  // namespace opt
+ }  // namespace fx2
+diff --git a/cpp_infer/src/opt/model_opt.h b/cpp_infer/src/opt/model_opt.h
+index cf6eaeb..64784fe 100644
+--- a/cpp_infer/src/opt/model_opt.h
++++ b/cpp_infer/src/opt/model_opt.h
+@@ -44,6 +44,42 @@ struct E2Config {
+   bool on() const { return fwk > 0 || logit; }
+ };
+ 
++// [sub100mil E10] dynamic evaluation: the transformer's OWN parameters are
++// adapted online (zero-init deltas on top of the frozen weights; runtime state
++// only, identical in compressor and decompressor; nothing in the archive).
++// Adapted parameters, per layer l in [lmin, 11]:
++//   sites bit0: per-channel gain on the attention/KDA branch output (192)
++//   sites bit1: per-channel gain on the MLP branch output (192)
++//   sites bit2: bias on the attention/KDA branch output (192)
++//   sites bit3: bias on the MLP branch output (192)
++//   sites bit4: per-neuron gain on the MLP hidden relu^2 code (768),
++//               only in the top mlpbk layers (needs the MLP backward)
++//   sites bit5: low-rank residual branch x += B (A xn_mlp) at the MLP
++//               (A rank x 192 fixed-LCG init, B 192 x rank zero init)
++// Gradient: CE of the main head at the coded token, back through the frozen
++// unembedding + final RMS norm, then down the residual stream (skip and
++// residual coefficients exact). Attention/KDA Jacobians are dropped
++// (truncated, current-position-only backprop); the MLP Jacobian is included
++// exactly (STE through quantizers) for the top mlpbk layers.
++// Optimizer: opt 0 = SGD; opt 1 = Adam-style RMS normalization (beta, eps,
++// bias-corrected), plus an optional decay toward the frozen value.
++struct E10Config {
++  int on = 0;
++  int sites = 3;
++  int lmin = 0;
++  int mlpbk = 0;
++  int opt = 1;
++  float lr = 1e-4f;     // gains
++  float lrb = 1e-4f;    // biases
++  float lrh = 1e-4f;    // hidden-neuron gains
++  float beta = 0.999f;
++  float eps = 1e-6f;
++  float decay = 0.0f;
++  int rank = 4;          // sites bit5: low-rank branch rank (<= 16)
++  float lrl = 1e-5f;     // its rate
++  float ainit = 0.07f;   // A init amplitude (uniform)
++};
++
+ struct TransformerOpt {
+   explicit TransformerOpt(const char* weights_path,
+                           AttnKind attn = AttnKind::KVF32);
+@@ -72,6 +108,11 @@ struct TransformerOpt {
+   const float* e2_probs() const;
+   void e2_update(uint8_t target);
+ 
++  // [sub100mil E10] see E10Config. e10_update(y): one adaptation step on
++  // target y for the last step's prediction (call before the next step).
++  void e10_set(const E10Config& cfg);
++  void e10_update(uint8_t target);
++
+  private:
+   std::unique_ptr<TransformerOptImpl> impl;
+ };
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index b765a64..e45097b 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -305,6 +305,35 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+             (int)e2_final_);
+       }
+     }
++    {  // [sub100mil E10] dynamic evaluation (encoder and decoder must match)
++      auto geti = [](const char* n, int d) {
++        const char* v = getenv(n); return v && *v ? atoi(v) : d; };
++      auto getf = [](const char* n, float d) {
++        const char* v = getenv(n); return v && *v ? strtof(v, nullptr) : d; };
++      fx2::opt::E10Config c;
++      c.on = geti("E10", 0);
++      c.sites = geti("E10_SITES", c.sites);
++      c.lmin = geti("E10_LMIN", c.lmin);
++      c.mlpbk = geti("E10_MLPBK", c.mlpbk);
++      c.opt = geti("E10_OPT", c.opt);
++      c.lr = getf("E10_LR", c.lr);
++      c.lrb = getf("E10_LRB", c.lrb);
++      c.lrh = getf("E10_LRH", c.lrh);
++      c.beta = getf("E10_BETA", c.beta);
++      c.eps = getf("E10_EPS", c.eps);
++      c.decay = getf("E10_DECAY", c.decay);
++      c.rank = geti("E10_RANK", c.rank);
++      c.lrl = getf("E10_LRL", c.lrl);
++      c.ainit = getf("E10_AINIT", c.ainit);
++      e10_on_ = c.on != 0;
++      if (e10_on_) {
++        transformer_->e10_set(c);
++        fprintf(stderr, "E10: sites=%d lmin=%d mlpbk=%d opt=%d lr=%g lrb=%g "
++            "lrh=%g beta=%g eps=%g decay=%g rank=%d lrl=%g ainit=%g\n", c.sites,
++            c.lmin, c.mlpbk, c.opt, c.lr, c.lrb, c.lrh, c.beta, c.eps,
++            c.decay, c.rank, c.lrl, c.ainit);
++      }
++    }
+     if (!options.save_transformer_probs.empty()) {
+       transformer_probs_writer_.reset(
+           new HalfFileWriter(options.save_transformer_probs));
+@@ -651,6 +680,10 @@ void Predictor::TransformerByteUpdate() {
+   // [sub100mil E2] train on the byte just coded, iff the head predicted it
+   if (e2_pending_) transformer_->e2_update((uint8_t)token);
+   e2_pending_ = false;
++  // [sub100mil E10] adapt the transformer on the byte just coded, iff it
++  // predicted it (the forward cache belongs to that prediction)
++  if (e10_pending_) transformer_->e10_update((uint8_t)token);
++  e10_pending_ = false;
+   memmove(separator_window_, separator_window_ + 1,
+       sizeof(separator_window_) - 1);
+   separator_window_[sizeof(separator_window_) - 1] = (unsigned char)token;
+@@ -668,6 +701,7 @@ void Predictor::TransformerByteUpdate() {
+     if (article_tokens_ == 1) transformer_->begin_article();
+     transformer_->step((uint8_t)token, half_scratch_.data(),
+         transformer_probs_.data());
++    e10_pending_ = e10_on_;
+ #ifdef FX2_PROF
+     ++fx2prof::tokens;
+ #endif
+diff --git a/src/predictor.h b/src/predictor.h
+index ceab656..29bfa84 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -202,6 +202,8 @@ class Predictor {
+   std::vector<float> e2_row_;
+   float e2_output_ = 0.5f;
+   double e2_loss_sum_ = 0, e2_mix_loss_sum_ = 0;
++  // [sub100mil E10] dynamic evaluation of the transformer (E10_* env vars)
++  bool e10_on_ = false, e10_pending_ = false;
+ };
+ 
+ #endif
