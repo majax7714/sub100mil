@@ -5,6 +5,12 @@ on **enwik9** is under **100,000,000 bytes**, while staying within the official
 compute limits. The authoritative constraints live in [`docs/RULES.md`](docs/RULES.md).
 Read it before you design anything that touches time, memory, threads or the size accounting.
 
+**Hard limits (summary; details and sources in RULES.md):** 1 CPU core, no GPU at runtime,
+≤10 GB RAM (target ≤9.5e9 bytes peak), ≤100 GB scratch disk, ≲50 h per program on the
+reference machine (target ≤45 h), AVX2 at most (no AVX-512), no network and no external files.
+**The compressor's size counts toward S**, and any embedded weights or dictionaries count
+too. Record L = 100,424,672 bytes (Sep 2026). A prize needs S < 99,420,425.
+
 This file is the single source of project rules for any agent (Claude, Codex, etc.).
 `CLAUDE.md` imports it.
 
