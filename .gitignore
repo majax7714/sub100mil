@@ -8,3 +8,5 @@
 # local scratch
 *.tmp
 __pycache__/
+# third-party reference code: fetched pinned, never vendored
+/third_party/
