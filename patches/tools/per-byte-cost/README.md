@@ -7,7 +7,7 @@ tooling: use it to see *where* an experiment gains or loses bits, not just how m
 
 It is observation only. It reads values the predictor already computes and never feeds anything back.
 With the log enabled, the 1M slice gives the same archive size as the release binary (126,473 B) and
-round-trips. The 10M check is in docs/design/A1-retrieval.md. The log is off unless `FX2_COSTLOG` is set.
+round-trips. The 10M slice gives 1,264,682 B, also identical, and round-trips. The log is off unless `FX2_COSTLOG` is set.
 
 ## Build
 

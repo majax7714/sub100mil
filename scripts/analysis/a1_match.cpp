@@ -207,7 +207,9 @@ int main(int argc, char** argv) {
   // mixer sim (cost log only)
   const int NIN = 1 + 1 + NP;   // st(p_rec), bias, one per predictor
   const int NCTX = 10 * 4;      // lp length bucket x record-confidence bucket
-  Mixer mbase(2, NCTX, 0.002f), mwith(NIN, NCTX, 0.002f);
+  const float lr = getenv("A1_LR") ? atof(getenv("A1_LR")) : 0.002f;  // mixer learning rate
+  Mixer mbase(2, NCTX, lr), mwith(NIN, NCTX, lr);
+  const float degrade = getenv("A1_DEGRADE") ? atof(getenv("A1_DEGRADE")) : 1.0f;
   Counter conf((size_t)NP * 10 * 8 * 2);
   double cbase_tot = 0, cwith_tot = 0, crec_tot = 0;
   std::vector<float> mixout; if (costlog) mixout.resize(n * 2);
@@ -288,7 +290,7 @@ int main(int argc, char** argv) {
       for (int b = 7; b >= 0; --b) {
         int bit = (c >> b) & 1;
         float prec = pbits[i * 8 + (7 - b)] / 65536.0f;
-        float st = stretchf(prec);
+        float st = stretchf(prec) * degrade;  // degrade < 1: sanity check that the sim can find signal
         int cb4 = fabsf(st) < 1 ? 0 : fabsf(st) < 3 ? 1 : fabsf(st) < 6 ? 2 : 3;
         int ctx = lb * 4 + cb4;
         mbase.x[0] = st; mbase.x[1] = 0.25f;
