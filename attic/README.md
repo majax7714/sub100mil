@@ -13,3 +13,4 @@ Strategies that failed or were superseded. **We keep them, we don't delete them.
 |------|------|------------------|
 | 2026-11-05 | [A1-retrieval](2026-11-05-A1-retrieval/NOTES.md) | No-go: the record + memorized transformer already capture repetition; realistic gain is about 10–20 KB |
 | 2026-11-05 | [A2-link-targets](2026-11-05-A2-link-targets/NOTES.md) | No-go: the record already ranks link targets far better than a prefix candidate set (7.6 vs 13.1 bits per seen link); sim +208 B on 10M, about +17 KB (0–40 KB) projected on enwik9 |
+| 2026-11-05 | [E11-in-article-cache](2026-11-05-E11-in-article-cache/NOTES.md) | No-go: an in-article token cache gains +702 B on 10M (0.056%); repeats of rare words gain but first uses lose; about 60 KB (45–90 KB) projected on enwik9, and E10 dyneval targets the same signal |
