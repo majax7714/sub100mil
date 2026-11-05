@@ -12,6 +12,21 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: A2 link-target model is a NO-GO (about 17 KB at full scale)
+- **Type:** architectural (specialist model), tested offline only
+- **Did:** Simulated a link-target candidate model (prefix tries over earlier link targets, titles and same-article links) mixed per bit with
+  the record's probabilities from A1's cost dumps. Scripts `scripts/analysis/a2_*`; write-up in docs/design/A2-link-targets.md; attic
+  `attic/2026-11-05-A2-link-targets/` (commits d000453, 2f3f897).
+- **Numbers:** 10M +208 B (0.11% of link bits), 1M +16 B. Projected to enwik9 in the record's article order: about +17 KB (range 0 to +40 KB),
+  against the 100 KB bar. No ledger rows (no archive produced, as for A1).
+- **Learned:**
+  - The record already ranks link targets far better than a candidate list: it pays 7.6 bits per previously seen link, while a frequency-ranked
+    list pays 13.1 bits even when told for free that the target is in the list.
+  - The only positive part is links already used *in the same article* (+3.7% on that bucket). The record still pays 6.5 bits for those, so its
+    in-article recall is imperfect.
+- **Next:** an in-article cache model over WRT word codes and phrases, which would cover prose (64% of bits) too and can be tested offline with
+  A2's `BitSim`. Link structure is more promising as transformer context (LANDSCAPE D1) than as a byte predictor.
+
 ## 2026-11-05: E2 online correction head is the best result so far (−0.17%)
 - **Type:** model addition (transformer-side, online learning)
 - **Did:** Built 5 variants of an online correction on the frozen transformer, including ex-girlfriend's fast-weight head (pinned at e923fae via
