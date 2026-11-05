@@ -16,3 +16,5 @@ clone() { # name url commit
 clone fx2-cmix-transformer-v1 https://github.com/astOwOlfo/fx2-cmix-transformer-v1 83f2603f3f7751da5f429fd32669807eb8510494
 # Pending entry (95,914,051 B). GPL-3.0-only
 clone cmix-neif-1.0 https://github.com/marwoelk/cmix-neif-1.0 1c9ea5ed57ec9718bcb681d20b79e81a60b7a728
+# neif + online fast-weight head (LTCB-only, 95,773,359 B); read for E2 (patches/exp/E2-correction-head). GPL-3.0
+clone ex-girlfriend https://github.com/rlanday/ex-girlfriend e923faec085a93d24bf519986ee2881497e97934
