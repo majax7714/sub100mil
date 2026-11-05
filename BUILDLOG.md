@@ -12,6 +12,18 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: A1 retrieval model is a no-go (measured); per-byte cost tool
+- **Type:** architectural (evidence only)
+- **Did:** Built a per-byte cost instrument for the record (`patches/tools/per-byte-cost/`) and measured the match/retrieval
+  headroom on the 10M slice and the full 586 MB stream. Write-up in `docs/design/A1-retrieval.md`, attic entry in `attic/2026-11-05-A1-retrieval/`.
+- **Numbers:** The opportunity bucket is 2,071 B (0.16%) on 10M. A simulated retrieval mixer gives −101 to +18 B. The full-scale upper bound is
+  about 1.0 MB; the realistic gain is about 10–20 KB.
+- **Learned:**
+  - Repetition is already captured, between the match models and the transformer's memorization. The bits go to word choice:
+    prose 63.8%, link targets 14.3%. The transformer alone is only 0.9% worse than the full record.
+  - **Free bug found:** the record reads fxcm slot 430 (a constant 0.5) instead of 428.
+- **Next:** E9 (the slot fix), A2 (link-target model, testable offline first). Transformer-side word-choice work (E2, dynamic evaluation).
+
 ## 2026-11-05: record (fx2-cmix-transformer) built and profiled; experiment backlog
 - **Type:** measurement (baseline characterization)
 - **Did:** Built the record with g++ 15 (PGO+LTO, x86-64-v3; patches and build.sh in `patches/fx2-cmix-transformer/`). The rebuild is

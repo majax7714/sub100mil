@@ -11,4 +11,4 @@ Strategies that failed or were superseded. **We keep them, we don't delete them.
 
 | Date | Slug | One-line verdict |
 |------|------|------------------|
-| | | |
+| 2026-11-05 | [A1-retrieval](2026-11-05-A1-retrieval/NOTES.md) | No-go: the record + memorized transformer already capture repetition; realistic gain is about 10–20 KB |
