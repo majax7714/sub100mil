@@ -222,10 +222,10 @@ index 73d3a61..12d7c01 100644
  struct PredictorOptions {
    // Run only the ppmd model. Predict() returns the ppmd's bit prediction and
 diff --git a/src/runner.cpp b/src/runner.cpp
-index 049d681..eba2d47 100644
+index 049d681..9cabd82 100644
 --- a/src/runner.cpp
 +++ b/src/runner.cpp
-@@ -27,9 +27,28 @@
+@@ -27,9 +27,36 @@
  #include <stdlib.h>
  #include <string.h>
  #include <algorithm>
@@ -250,11 +250,19 @@ index 049d681..eba2d47 100644
 +  // [sub100mil slice patch] Vocabulary bitmask of the full-enwik9 preprocessed
 +  // stream (bit j of byte i = byte value 8*i+j), as printed by
 +  // FX2_PRINT_VOCAB=1 ./cmix -e enwik9 ... on this build.
++  // [sub100mil slice patch] -c/-d with --transformer: the 5-byte block header
++  // preprocessor::Encode writes (type + 4-byte big-endian length) is stored raw
++  // in the archive instead of being CM-coded. For inputs < 16 MiB its length
++  // bytes include 0x00 (and others) that are not in the enwik9 vocabulary, so
++  // the transformer could not take them as tokens; on enwik9 they happen to be
++  // in-vocabulary. Costs 5 bytes. -e and argless decompression are unchanged.
++  bool g_raw_block_header = false;
++  const int kRawHeaderBytes = 5;
 +  const unsigned char kEnwik9Vocab[32] = {0xe8,0x16,0x04,0x00,0xff,0xff,0xff,0x03,0x01,0xfc,0x0f,0xf9,0xfe,0xff,0xff,0x07,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
  }
  
  int Help() {
-@@ -787,6 +806,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+@@ -787,6 +814,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
    fseek(data_in, 0L, SEEK_SET);
  
    if (enable_preprocess) {
@@ -262,10 +270,27 @@ index 049d681..eba2d47 100644
      fprintf(stderr, "\rpreprocessing...");
      fflush(stderr);
      preprocessor::Encode(data_in, temp_out, *input_bytes, temp_path,
-@@ -814,6 +834,36 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
-     temp_in.seekg(0, std::ios::beg);
-   }
+@@ -805,13 +833,50 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   temp_in.seekg(0, std::ios::end);
+   unsigned long long temp_bytes = temp_in.tellg();
+   temp_in.seekg(0, std::ios::beg);
++  char raw_header[kRawHeaderBytes];
++  const int payload_start = g_raw_block_header ? kRawHeaderBytes : 0;
++  if (g_raw_block_header) {
++    if (temp_bytes < (unsigned long long)kRawHeaderBytes) Fail("stream too short");
++    temp_in.read(raw_header, kRawHeaderBytes);
++    temp_bytes -= kRawHeaderBytes;
++  }
  
+   std::vector<bool> vocab(256, false);
+   if (temp_bytes < kMinVocabFileSize) {
+     std::fill(vocab.begin(), vocab.end(), true);
+   } else {
+     ExtractVocab(temp_bytes, &temp_in, &vocab);
+-    temp_in.seekg(0, std::ios::beg);
++    temp_in.seekg(payload_start, std::ios::beg);
++  }
++
 +  // [sub100mil slice patch] Print the vocabulary bitmask when asked (used once on
 +  // full enwik9 -e to obtain kEnwik9Vocab below).
 +  if (getenv("FX2_PRINT_VOCAB")) {
@@ -294,12 +319,18 @@ index 049d681..eba2d47 100644
 +      n += vocab[i];
 +    }
 +    if (n != 205) Fail("kEnwik9Vocab has %d bytes, expected 205", n);
-+  }
-+
-   if (!extraction.save_ppmd_bytes.empty()) {
-     SavePpmdBytes(temp_path, temp_bytes, vocab, extraction.save_ppmd_bytes);
    }
-@@ -842,14 +892,30 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+ 
+   if (!extraction.save_ppmd_bytes.empty()) {
+@@ -834,6 +899,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   }
+ 
+   WriteHeader(temp_bytes, vocab, dictionary != NULL, &data_out);
++  if (g_raw_block_header) data_out.write(raw_header, kRawHeaderBytes);
+   PredictorOptions predictor_options;
+   predictor_options.ppmd_only = extraction.ppmd_only;
+   predictor_options.transformer_only = extraction.transformer_only;
+@@ -842,14 +908,30 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
    predictor_options.num_input_bytes = temp_bytes;
    predictor_options.transformer_weights = transformer_weights;
    predictor_options.save_transformer_probs = extraction.save_transformer_probs;
@@ -330,3 +361,30 @@ index 049d681..eba2d47 100644
    temp_in.close();
    data_out.close();
    remove(temp_path.c_str());
+@@ -876,6 +958,10 @@ bool RunDecompression(const std::string& input_path,
+   std::vector<bool> vocab(256, false);
+   bool dictionary_used;
+   ReadHeader(&data_in, output_bytes, &dictionary_used, &vocab);
++  char raw_header[kRawHeaderBytes];
++  if (g_raw_block_header && *output_bytes != 0) {
++    data_in.read(raw_header, kRawHeaderBytes);
++  }
+   if (!dictionary_used && dictionary != NULL) {
+     Fail("a dictionary was provided, but %s was compressed without one",
+         input_path.c_str());
+@@ -918,6 +1004,7 @@ bool RunDecompression(const std::string& input_path,
+ 
+   std::ofstream temp_out(temp_path, std::ios::out | std::ios::binary);
+   if (!temp_out.is_open()) return false;
++  if (g_raw_block_header) temp_out.write(raw_header, kRawHeaderBytes);
+ 
+   Decompress(*output_bytes, &data_in, &temp_out, &p);
+   data_in.close();
+@@ -995,6 +1082,7 @@ int main(int argc, char** argv) {
+   }
+ 
+   std::string temp_path = output_path + ".cmix.temp";
++  g_raw_block_header = (mode == 'c' || mode == 'd') && !extraction.transformer.empty();
+ 
+   unsigned long long input_bytes = 0, output_bytes = 0;
+ 
