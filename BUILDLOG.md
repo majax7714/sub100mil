@@ -12,6 +12,21 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: record (fx2-cmix-transformer) built and profiled; experiment backlog
+- **Type:** measurement (baseline characterization)
+- **Did:** Built the record with g++ 15 (PGO+LTO, x86-64-v3; patches and build.sh in `patches/fx2-cmix-transformer/`). The rebuild is
+  reproducible. Added a slice mode via 3 small patches. Write-up in `docs/refs/fx2-cmix-transformer.md`. Wrote `docs/EXPERIMENTS.md` (backlog).
+- **Numbers:** 1M slice 126,473 B (1.0118 bpb), 10M 1,264,682 B (1.0117 bpb), both round-trip OK. About 105 s per MB in each direction.
+  Peak RSS 5.8 GB on slices. Full-run ESTIMATE about 29.5 h per direction on this box. comp9 3,601,651 B vs the official 3,428,474 (UPX difference).
+- **Learned:**
+  - g++ 15 emits vendor-dependent RCPPS/RSQRTPS under fast-math even with `-mrecip=none`. That's the Intel/AMD desync bug.
+    `-fno-finite-math-only` removes them, and build.sh now checks for it.
+  - **The record's transformer is compute-bound** (IPC 3.0, 98 µs/token), unlike neif's L3-bandwidth-bound one. But it's sensitive to
+    L3 capacity: +97% time with a 12 MiB co-runner. The rest of the compressor is DRAM-latency bound.
+  - Time headroom is about 7.8 h to our 45 h target, but RAM headroom is only about 0.3 GB.
+  - Slices sit inside the transformer's training data, which explains the 1.01 bpb.
+- **Next:** Pick a first batch from docs/EXPERIMENTS.md (E1/E2/E3 are cheap model additions). Consider a full enwik9 baseline run of the record (about 30 h per direction, CPU only).
+
 ## 2026-11-05: cmix-neif built and profiled (reference, no changes)
 - **Type:** measurement (baseline characterization)
 - **Did:** Built neif with g++ 15.3.1 (`-march=x86-64-v3`, LTO, no PGO). Patch in `patches/cmix-neif/`; write-up in
