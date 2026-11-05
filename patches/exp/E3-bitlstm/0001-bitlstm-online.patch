@@ -1,0 +1,1087 @@
+diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
+index 85773ba..eb51d5d 100644
+--- a/cpp_infer/src/opt/model_opt.cpp
++++ b/cpp_infer/src/opt/model_opt.cpp
+@@ -569,6 +569,7 @@ void TransformerOpt::step(uint8_t token, const float* prior205,
+ }
+ 
+ const float* TransformerOpt::last_logits() const { return impl->logits; }
++const float* TransformerOpt::last_hidden() const { return impl->xn; }
+ 
+ AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
+ 
+diff --git a/cpp_infer/src/opt/model_opt.h b/cpp_infer/src/opt/model_opt.h
+index 11deec2..7a36553 100644
+--- a/cpp_infer/src/opt/model_opt.h
++++ b/cpp_infer/src/opt/model_opt.h
+@@ -43,6 +43,9 @@ struct TransformerOpt {
+ 
+   // the 205 post-softcap logits of the last step (valid until the next step)
+   const float* last_logits() const;
++  // [sub100mil E3] the 192 normalised final hidden values of the last step
++  // (the vector the output head reads; valid until the next step)
++  const float* last_hidden() const;
+ 
+   AttnKind attn_kind() const;
+ 
+diff --git a/makefile b/makefile
+index f7ddcc4..50272c7 100644
+--- a/makefile
++++ b/makefile
+@@ -88,6 +88,11 @@ tf_%.o: cpp_infer/src/opt/%.cpp $(wildcard cpp_infer/src/opt/*.h) cpp_infer/src/
+ 	$(CC) $(CPPFLAGS_TRANSFORMER) -c $< -o $@
+ 
+ 
++# [sub100mil E3] BITLSTM head: value-safe FP (no fast-math, no contraction
++# across statements), no PGO/LTO, like the transformer objects.
++bit_head.o: src/bit_head.cpp src/bit_head.h
++	$(CC) -m64 -O3 -std=c++17 -Wall -fno-math-errno -ffp-contract=off -fdata-sections -ffunction-sections $(ARCHFLAGS) -c src/bit_head.cpp -o $@
++
+ prof_gen: CPPFLAGS_PART-THAT-CAN-BE-SLOW    += -fprofile-generate=$(ROOT_DIR)/pgo_data
+ prof_gen: CPPFLAGS_PART-THAT-SHOULD-BE-FAST += -fprofile-generate=$(ROOT_DIR)/pgo_data
+ prof_gen: LFLAGS                            += -fprofile-generate=$(ROOT_DIR)/pgo_data
+@@ -105,8 +110,8 @@ slow: src/preprocess/preprocessor.cpp src/preprocess/preprocessor.h src/preproce
+ fast: src/coder/decoder.cpp src/coder/decoder.h src/coder/encoder.cpp src/coder/encoder.h src/context-manager.cpp src/context-manager.h src/contexts/bit-context.cpp src/contexts/bit-context.h src/contexts/bracket-context.cpp src/contexts/bracket-context.h src/contexts/combined-context.cpp src/contexts/combined-context.h src/contexts/context-hash.cpp src/contexts/context-hash.h src/contexts/context.h src/contexts/indirect-hash.cpp src/contexts/indirect-hash.h src/contexts/interval-hash.cpp src/contexts/interval-hash.h src/contexts/interval.cpp src/contexts/interval.h src/contexts/sparse.cpp src/contexts/sparse.h  src/models/bracket.cpp src/models/bracket.h src/models/byte-model.cpp src/models/byte-model.h src/models/direct-hash.cpp src/models/direct-hash.h src/models/direct.cpp src/models/direct.h src/models/indirect.cpp src/models/indirect.h src/models/match.cpp src/models/match.h src/models/model.h src/models/fxcmv1.h src/models/ppmd.cpp src/models/ppmd.h src/states/nonstationary.cpp src/states/nonstationary.h src/states/run-map.cpp src/states/run-map.h src/states/state.h src/mixer/byte-mixer.cpp src/mixer/byte-mixer.h src/mixer/lstm-layer.h src/mixer/lstm.h src/mixer/mixer-input.cpp src/mixer/mixer-input.h src/mixer/mixer.cpp src/mixer/mixer.h src/mixer/sigmoid.cpp src/mixer/sigmoid.h src/mixer/sse.cpp src/mixer/sse.h src/predictor.h src/predictor.cpp src/runner.cpp
+ 	$(CC) $(CPPFLAGS_PART-THAT-SHOULD-BE-FAST) src/coder/decoder.cpp src/coder/encoder.cpp src/context-manager.cpp src/contexts/bit-context.cpp src/contexts/bracket-context.cpp src/contexts/combined-context.cpp src/contexts/context-hash.cpp src/contexts/indirect-hash.cpp src/contexts/interval-hash.cpp src/contexts/interval.cpp src/contexts/sparse.cpp src/models/bracket.cpp src/models/byte-model.cpp src/models/direct-hash.cpp src/models/direct.cpp src/models/indirect.cpp src/models/match.cpp src/models/fxcmv1.cpp src/models/ppmd.cpp src/states/nonstationary.cpp src/states/run-map.cpp src/mixer/byte-mixer.cpp src/mixer/mixer-input.cpp src/mixer/mixer.cpp src/mixer/sigmoid.cpp src/mixer/sse.cpp -c src/predictor.cpp src/runner.cpp
+ 
+-cmix: fast slow $(TRANSFORMER_OBJS)
+-	$(CC) $(LFLAGS) bit-context.o bracket-context.o bracket.o byte-mixer.o byte-model.o combined-context.o context-hash.o context-manager.o decoder.o dictionary.o direct-hash.o direct.o encoder.o indirect-hash.o indirect.o interval-hash.o interval.o match.o mixer-input.o mixer.o nonstationary.o fxcmv1.o ppmd.o predictor.o preprocessor.o run-map.o runner.o sigmoid.o sparse.o sse.o $(TRANSFORMER_OBJS) $(STRIP) -o cmix
++cmix: fast slow $(TRANSFORMER_OBJS) bit_head.o
++	$(CC) $(LFLAGS) bit-context.o bracket-context.o bracket.o byte-mixer.o byte-model.o combined-context.o context-hash.o context-manager.o decoder.o dictionary.o direct-hash.o direct.o encoder.o indirect-hash.o indirect.o interval-hash.o interval.o match.o mixer-input.o mixer.o nonstationary.o fxcmv1.o ppmd.o predictor.o preprocessor.o run-map.o runner.o sigmoid.o sparse.o sse.o $(TRANSFORMER_OBJS) bit_head.o $(STRIP) -o cmix
+ 	rm -f *.o
+ 
+ remap: src/readalike_prepr/article_remap.cpp
+diff --git a/src/bit_head.cpp b/src/bit_head.cpp
+new file mode 100644
+index 0000000..0016d39
+--- /dev/null
++++ b/src/bit_head.cpp
+@@ -0,0 +1,815 @@
++// [sub100mil E3] BITLSTM correction head, online-only port.  Contract in
++// bit_head.h.
++//
++// This translation unit MUST be compiled without fast-math and with
++// -ffp-contract=off (makefile rule bit_head.o, no LTO, no PGO).
++//
++// ATTRIBUTION.  Ported from src/bit_head.cpp of cmix-neif-1.0 (marwoelk,
++// GPL-3.0-only).  There: the AVX2 kernels Exp8/Sigmoid8/Tanh8 and the
++// fixed-order DotPadded reduction are ported line by line from
++// src/models/bitlstm32-head.cpp of cmix-obias (David Freelan, GPL-3.0); Exp8
++// is an altered exp256_ps of avx_mathfun.h (Giovanni Garberoglio, 2012),
++// itself based on sse_mathfun.h (Julien Pommier, 2007), zlib licence; its
++// polynomial is the Cephes expf of Stephen L. Moshier.  The buffered TBPTT
++// backward pass, Adam step, gradient clipping and the fixed state projection
++// are neif's.  Changes here: no compiled-in weights (online from bit 0),
++// runtime configuration, no byte-LSTM/SSE/zone blocks, a vectorised
++// (fixed-order) transformer-state projection, and mode 1 (head as an extra
++// final-mixer input).
++
++#include "bit_head.h"
++
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++#include <immintrin.h>
++
++namespace bit_head {
++namespace {
++
++constexpr float kTScale = 12.203f;
++// +0 m1raw/T... see layout in Head
++constexpr int kBaseExtra = 12;
++
++inline float Sigmoidf(float x) { return 1.0f / (1.0f + std::exp(-x)); }
++inline float Sgn(float x) { return (x > 0.0f) ? 1.0f : (x < 0.0f ? -1.0f : 0.0f); }
++
++inline __m256 Exp8(__m256 x) {
++  const __m256 exp_hi = _mm256_set1_ps(88.3762626647949f);
++  const __m256 exp_lo = _mm256_set1_ps(-88.3762626647949f);
++  const __m256 log2e = _mm256_set1_ps(1.44269504088896341f);
++  const __m256 c1 = _mm256_set1_ps(0.693359375f);
++  const __m256 c2 = _mm256_set1_ps(-2.12194440e-4f);
++  const __m256 p0 = _mm256_set1_ps(1.9875691500e-4f);
++  const __m256 p1 = _mm256_set1_ps(1.3981999507e-3f);
++  const __m256 p2 = _mm256_set1_ps(8.3334519073e-3f);
++  const __m256 p3 = _mm256_set1_ps(4.1665795894e-2f);
++  const __m256 p4 = _mm256_set1_ps(1.6666665459e-1f);
++  const __m256 p5 = _mm256_set1_ps(5.0000001201e-1f);
++  const __m256 one = _mm256_set1_ps(1.0f);
++  x = _mm256_min_ps(x, exp_hi);
++  x = _mm256_max_ps(x, exp_lo);
++  __m256 fx = _mm256_fmadd_ps(x, log2e, _mm256_set1_ps(0.5f));
++  fx = _mm256_floor_ps(fx);
++  x = _mm256_fnmadd_ps(fx, c1, x);
++  x = _mm256_fnmadd_ps(fx, c2, x);
++  const __m256 z = _mm256_mul_ps(x, x);
++  __m256 y = p0;
++  y = _mm256_fmadd_ps(y, x, p1);
++  y = _mm256_fmadd_ps(y, x, p2);
++  y = _mm256_fmadd_ps(y, x, p3);
++  y = _mm256_fmadd_ps(y, x, p4);
++  y = _mm256_fmadd_ps(y, x, p5);
++  y = _mm256_fmadd_ps(y, z, x);
++  y = _mm256_add_ps(y, one);
++  const __m256i imm = _mm256_add_epi32(_mm256_cvttps_epi32(fx),
++                                       _mm256_set1_epi32(0x7f));
++  const __m256 pow2n = _mm256_castsi256_ps(_mm256_slli_epi32(imm, 23));
++  return _mm256_mul_ps(y, pow2n);
++}
++inline __m256 Sigmoid8(__m256 x) {
++  const __m256 one = _mm256_set1_ps(1.0f);
++  return _mm256_div_ps(one, _mm256_add_ps(one,
++      Exp8(_mm256_sub_ps(_mm256_setzero_ps(), x))));
++}
++inline __m256 Tanh8(__m256 x) {
++  const __m256 one = _mm256_set1_ps(1.0f);
++  const __m256 e = Exp8(_mm256_mul_ps(x, _mm256_set1_ps(-2.0f)));
++  return _mm256_div_ps(_mm256_sub_ps(one, e), _mm256_add_ps(one, e));
++}
++
++inline float DotPadded(const float* w, const float* x, int n_padded) {
++  __m256 acc = _mm256_setzero_ps();
++  for (int j = 0; j < n_padded; j += 8) {
++    acc = _mm256_fmadd_ps(_mm256_loadu_ps(w + j), _mm256_loadu_ps(x + j), acc);
++  }
++  __m128 lo = _mm256_castps256_ps128(acc);
++  __m128 hi = _mm256_extractf128_ps(acc, 1);
++  __m128 s = _mm_add_ps(lo, hi);
++  s = _mm_add_ps(s, _mm_movehl_ps(s, s));
++  s = _mm_add_ss(s, _mm_shuffle_ps(s, s, 1));
++  return _mm_cvtss_f32(s);
++}
++
++inline void AxpyNoFma(float* __restrict acc, const float* __restrict v,
++                      float sc, int n) {
++  const __m256 vs = _mm256_set1_ps(sc);
++  for (int j = 0; j < n; j += 8) {
++    _mm256_storeu_ps(acc + j,
++        _mm256_add_ps(_mm256_loadu_ps(acc + j),
++                      _mm256_mul_ps(vs, _mm256_loadu_ps(v + j))));
++  }
++}
++
++inline void GateRowBack(float* __restrict gwih_k, float* __restrict gwhh_k,
++                        float* __restrict dav, float* __restrict dhnv,
++                        const float* __restrict wih_k,
++                        const float* __restrict whh_k,
++                        const float* __restrict a_t,
++                        const float* __restrict hprev_t, float d, int n) {
++  const __m256 vd = _mm256_set1_ps(d);
++  for (int r = 0; r < n; r += 8) {
++    _mm256_storeu_ps(gwih_k + r,
++        _mm256_add_ps(_mm256_loadu_ps(gwih_k + r),
++                      _mm256_mul_ps(vd, _mm256_loadu_ps(a_t + r))));
++    _mm256_storeu_ps(gwhh_k + r,
++        _mm256_add_ps(_mm256_loadu_ps(gwhh_k + r),
++                      _mm256_mul_ps(vd, _mm256_loadu_ps(hprev_t + r))));
++    _mm256_storeu_ps(dav + r,
++        _mm256_add_ps(_mm256_loadu_ps(dav + r),
++                      _mm256_mul_ps(_mm256_loadu_ps(wih_k + r), vd)));
++    _mm256_storeu_ps(dhnv + r,
++        _mm256_add_ps(_mm256_loadu_ps(dhnv + r),
++                      _mm256_mul_ps(_mm256_loadu_ps(whh_k + r), vd)));
++  }
++}
++
++struct Hyp { float lr, b1, b2, eps; };
++
++// Adam, bias correction folded into lr.
++inline __m256 Step8(__m256 g, float* m1, float* m2, int j, const Hyp& hp) {
++  const __m256 b1 = _mm256_set1_ps(hp.b1);
++  const __m256 b2 = _mm256_set1_ps(hp.b2);
++  const __m256 one = _mm256_set1_ps(1.0f);
++  const __m256 mv = _mm256_fmadd_ps(b1, _mm256_loadu_ps(m1 + j),
++                                    _mm256_mul_ps(_mm256_sub_ps(one, b1), g));
++  const __m256 sv = _mm256_fmadd_ps(b2, _mm256_loadu_ps(m2 + j),
++      _mm256_mul_ps(_mm256_sub_ps(one, b2), _mm256_mul_ps(g, g)));
++  _mm256_storeu_ps(m1 + j, mv);
++  _mm256_storeu_ps(m2 + j, sv);
++  return _mm256_div_ps(mv, _mm256_add_ps(_mm256_sqrt_ps(sv),
++                                         _mm256_set1_ps(hp.eps)));
++}
++inline float Step1(float g, float* m1, float* m2, const Hyp& hp) {
++  const float mv = hp.b1 * (*m1) + (1.0f - hp.b1) * g;
++  const float sv = hp.b2 * (*m2) + (1.0f - hp.b2) * g * g;
++  *m1 = mv; *m2 = sv;
++  return mv / (std::sqrt(sv) + hp.eps);
++}
++inline void RowUpdate(float* w, float* m1, float* m2, const float* g,
++                      const Hyp& hp, int n) {
++  const __m256 vlr = _mm256_set1_ps(hp.lr);
++  for (int j = 0; j < n; j += 8) {
++    __m256 wv = _mm256_loadu_ps(w + j);
++    const __m256 step = Step8(_mm256_loadu_ps(g + j), m1, m2, j, hp);
++    wv = _mm256_fnmadd_ps(vlr, step, wv);
++    _mm256_storeu_ps(w + j, wv);
++  }
++}
++inline void ScalarUpdate(float* w, float* m1, float* m2, float g,
++                         const Hyp& hp) {
++  *w = *w - hp.lr * Step1(g, m1, m2, hp);
++}
++
++struct Rng {
++  uint64_t s;
++  explicit Rng(uint64_t seed) : s(seed) {}
++  uint64_t Next() {
++    uint64_t z = (s += 0x9e3779b97f4a7c15ULL);
++    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
++    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
++    return z ^ (z >> 31);
++  }
++  float Uniform(float b) {
++    const uint32_t r = (uint32_t)(Next() >> 40);
++    const float u = (float)r * (1.0f / 16777216.0f);
++    return (2.0f * u - 1.0f) * b;
++  }
++};
++
++long EnvL(const char* k, long d) {
++  const char* v = std::getenv(k);
++  return (v && *v) ? std::strtol(v, nullptr, 10) : d;
++}
++
++float* Alloc(int n) {
++  return (float*)std::calloc((size_t)(n > 0 ? n : 1), sizeof(float));
++}
++
++struct Head {
++  // ---- configuration (Init) ----
++  int enabled = 0;
++  int mode = 0;          // 0 = final logit correction, 1 = final-mixer input
++  int C = 16;            // cells, multiple of 8
++  int nhid = 32;         // transformer-state sketch width, multiple of 8 (0 = off)
++  int n1 = 0;            // stage-1 width (fixed on first call)
++  int n1keep = 0;
++  unsigned long long drop_mask = 0;   // stage-1 columns NOT fed
++  float lr = 3e-4f, b1 = 0.9f, b2 = 0.999f, eps = 1e-8f;
++  float clamp = 8.0f, clip = 1.0f;
++  int seq = 1024, accum = 16;
++  int kPrev = 0, kHid = 0, nin = 0, inw = 0;
++  double b1t = 1.0, b2t = 1.0;
++  int agrp = 0;
++  unsigned long long nvalid = 0;
++
++  float *win = nullptr, *bin = nullptr, *wih = nullptr, *whh = nullptr,
++        *bg = nullptr, *wout = nullptr;
++  float bout = 0.0f;
++  float *m1win, *m2win, *m1bin, *m2bin, *m1wih, *m2wih, *m1whh, *m2whh,
++        *m1bg, *m2bg, *m1wout, *m2wout;
++  float m1bout = 0.0f, m2bout = 0.0f;
++
++  float *h, *c, *hprev, *cprev;
++  float prev_bit = 0.5f;
++  unsigned long long i = 0;
++
++  float *x, *z, *sg, *a, *gi, *gf, *gg, *go, *tc, *pre, *dpre, *da;
++  float delta = 0.0f, t = 0.0f;
++  int skip = 0;
++
++  const float* aux_hid = nullptr;
++  int aux_n_hid = 0;
++  float* hidP = nullptr;   // aux_n_hid x nhid (transposed: one row per input)
++  float* hidC = nullptr;
++  unsigned long long hid_byte = ~0ULL;
++
++  int nbuf = 0;
++  float *bx, *bz, *bsg, *ba, *bgi, *bgf, *bgg, *bgo, *btc, *bh, *bc, *bdl;
++  float *gwin, *gbin, *gwih, *gwhh, *gbg, *gwout;
++  float gbout = 0.0f;
++  float *dhn, *dcn, *wsh, *wsc;
++
++  double cost_base = 0.0, cost_head = 0.0, win_base = 0.0, win_head = 0.0;
++  int stats = 0;
++  unsigned int pend_base = 32768, pend_head = 32768;
++  unsigned long long n_steps = 0, n_skipped = 0;
++
++  void Configure();
++  void Build(int n_stage1);
++  void Forward();
++  void BackwardWindow();
++  void BackwardWindowFast();
++  void FinishGroup();
++  int fastbw = 1;
++  float *winT = nullptr, *wihT = nullptr, *whhT = nullptr;  // forward copies
++  void Transpose();
++  float *bdp = nullptr, *bdz = nullptr;
++  void Apply();
++  float Run(unsigned int base_p, float tlogit, const float* stage1,
++            int n_stage1, float m1raw);
++  void Learn(int bit);
++};
++
++Head g;
++bool g_built = false;
++
++void Head::Configure() {
++  enabled = (int)EnvL("BITL", 1);
++  mode = (int)EnvL("BITL_MODE", 0);
++  C = (int)EnvL("BITL_CELLS", 16);
++  nhid = (int)EnvL("BITL_NHID", 32);
++  lr = (float)EnvL("BITL_LR_E6", 300) * 1e-6f;
++  accum = (int)EnvL("BITL_ACCUM", 16);
++  seq = (int)EnvL("BITL_SEQ", 1024);
++  fastbw = (int)EnvL("BITL_FASTBW", 1);
++  stats = (int)EnvL("BITL_STATS", 0);
++  // columns to drop, as a bit mask over the stage-1 row (hex)
++  const char* dm = std::getenv("BITL_DROP");
++  drop_mask = (dm && *dm) ? std::strtoull(dm, nullptr, 16) : 0ULL;
++  if (C <= 0 || C % 8 || nhid < 0 || nhid % 8 || accum < 1 || seq < 1 ||
++      mode < 0 || mode > 1) {
++    std::fprintf(stderr, "BITL: bad configuration\n");
++    std::exit(3);
++  }
++  if (aux_hid == nullptr) aux_n_hid = 0;
++}
++
++void Head::Build(int n_stage1) {
++  n1 = n_stage1;
++  n1keep = 0;
++  for (int j = 0; j < n1; ++j) if (!((drop_mask >> j) & 1ULL)) ++n1keep;
++  // feature row: [stage-1 kept][m1raw, t/T, (t/T)^2, sgn t, pos one-hot 8]
++  //              [prev_bit][hid sketch nhid]
++  kPrev = n1keep + kBaseExtra;
++  kHid = kPrev + 1;
++  nin = kHid + nhid;              // including prev_bit
++  inw = (nin + 7) & ~7;
++
++  if (nhid > 0 && aux_n_hid > 0) {
++    hidP = Alloc(aux_n_hid * nhid);
++    Rng prng(0x4849445052ULL);   // "HIDPR", as in neif
++    const float sc = 1.0f / std::sqrt((float)aux_n_hid);
++    // Same draw order as neif (row r of the sketch, column cc of the state),
++    // stored transposed so the projection vectorises over r.
++    for (int r = 0; r < nhid; ++r)
++      for (int cc = 0; cc < aux_n_hid; ++cc)
++        hidP[cc * nhid + r] = (prng.Uniform(1.0f) >= 0.0f) ? sc : -sc;
++  }
++  hidC = Alloc(nhid > 0 ? nhid : 8);
++
++  win = Alloc(C * inw); bin = Alloc(C);
++  wih = Alloc(4 * C * C); whh = Alloc(4 * C * C);
++  bg = Alloc(4 * C); wout = Alloc(C);
++  m1win = Alloc(C * inw); m1bin = Alloc(C);
++  m1wih = Alloc(4 * C * C); m1whh = Alloc(4 * C * C);
++  m1bg = Alloc(4 * C); m1wout = Alloc(C);
++  m2win = Alloc(C * inw); m2bin = Alloc(C);
++  m2wih = Alloc(4 * C * C); m2whh = Alloc(4 * C * C);
++  m2bg = Alloc(4 * C); m2wout = Alloc(C);
++  h = Alloc(C); c = Alloc(C); hprev = Alloc(C); cprev = Alloc(C);
++  x = Alloc(inw); z = Alloc(C); sg = Alloc(C); a = Alloc(C);
++  gi = Alloc(C); gf = Alloc(C); gg = Alloc(C); go = Alloc(C); tc = Alloc(C);
++  pre = Alloc(4 * C); dpre = Alloc(4 * C); da = Alloc(C);
++  const int W = seq;
++  bx = Alloc(W * inw);
++  bz = Alloc(W * C); bsg = Alloc(W * C); ba = Alloc(W * C);
++  bgi = Alloc(W * C); bgf = Alloc(W * C); bgg = Alloc(W * C); bgo = Alloc(W * C);
++  btc = Alloc(W * C); bh = Alloc(W * C); bc = Alloc(W * C); bdl = Alloc(W);
++  gwin = Alloc(C * inw); gbin = Alloc(C);
++  gwih = Alloc(4 * C * C); gwhh = Alloc(4 * C * C);
++  gbg = Alloc(4 * C); gwout = Alloc(C);
++  dhn = Alloc(C); dcn = Alloc(C); wsh = Alloc(C); wsc = Alloc(C);
++  bdp = Alloc(W * 4 * C); bdz = Alloc(W * C);
++  winT = Alloc(inw * C); wihT = Alloc(C * 4 * C); whhT = Alloc(C * 4 * C);
++
++  // neif's initialisation: PyTorch-style uniform hidden layers, forget-gate
++  // bias +1, output layer exactly zero (the head starts as a no-op).
++  Rng rng(0x42495431ULL);  // "BIT1"
++  const float bin_lim = 1.0f / std::sqrt((float)inw);
++  for (int r = 0; r < C; ++r) {
++    for (int j = 0; j < inw; ++j) win[r * inw + j] = rng.Uniform(bin_lim);
++    for (int j = nin; j < inw; ++j) win[r * inw + j] = 0.0f;
++    bin[r] = rng.Uniform(bin_lim);
++  }
++  const float hid_lim = 1.0f / std::sqrt((float)C);
++  for (int k = 0; k < 4 * C * C; ++k) wih[k] = rng.Uniform(hid_lim);
++  for (int k = 0; k < 4 * C * C; ++k) whh[k] = rng.Uniform(hid_lim);
++  for (int k = 0; k < 4 * C; ++k) bg[k] = rng.Uniform(hid_lim);
++  for (int r = 0; r < C; ++r) bg[1 * C + r] += 1.0f;
++  for (int r = 0; r < C; ++r) wout[r] = 0.0f;
++  bout = 0.0f;
++  Transpose();
++  std::fprintf(stderr,
++      "BITL: mode %d, %d cells, %d inputs (%d of %d stage-1 cols, hid %d of %d), "
++      "lr %g, accum %d, seq %d, %d params\n",
++      mode, C, nin, n1keep, n1, nhid, aux_n_hid, (double)lr, accum, seq,
++      C * inw + C + 8 * C * C + 4 * C + C + 1);
++}
++
++void Head::Transpose() {
++  for (int r = 0; r < C; ++r)
++    for (int j = 0; j < inw; ++j) winT[j * C + r] = win[r * inw + j];
++  for (int k = 0; k < 4 * C; ++k)
++    for (int r = 0; r < C; ++r) {
++      wihT[r * 4 * C + k] = wih[k * C + r];
++      whhT[r * 4 * C + k] = whh[k * C + r];
++    }
++}
++
++void Head::Forward() {
++  // in_proj: lane-parallel over outputs (transposed weights), output blocks
++  // of up to 32 cells, even/odd input partial sums added at the end.
++  for (int r0 = 0; r0 < C; r0 += 32) {
++    const int nv = (C - r0) >= 32 ? 4 : (C - r0) / 8;
++    __m256 e[4], o[4];
++    for (int v = 0; v < 4; ++v) { e[v] = _mm256_setzero_ps(); o[v] = _mm256_setzero_ps(); }
++    for (int j = 0; j + 1 < inw; j += 2) {
++      const __m256 x0 = _mm256_set1_ps(x[j]), x1 = _mm256_set1_ps(x[j + 1]);
++      for (int v = 0; v < nv; ++v) {
++        e[v] = _mm256_fmadd_ps(_mm256_loadu_ps(winT + j * C + r0 + 8 * v), x0, e[v]);
++        o[v] = _mm256_fmadd_ps(_mm256_loadu_ps(winT + (j + 1) * C + r0 + 8 * v), x1, o[v]);
++      }
++    }
++    for (int v = 0; v < nv; ++v)
++      _mm256_storeu_ps(z + r0 + 8 * v, _mm256_add_ps(_mm256_add_ps(e[v], o[v]),
++                                                     _mm256_loadu_ps(bin + r0 + 8 * v)));
++  }
++  for (int r = 0; r < C; r += 8) {
++    const __m256 zv = _mm256_loadu_ps(z + r);
++    const __m256 s = Sigmoid8(zv);
++    _mm256_storeu_ps(sg + r, s);
++    _mm256_storeu_ps(a + r, _mm256_mul_ps(zv, s));
++  }
++  {
++    // gates: pre = wih a + whh hprev + bg, blocks of up to 64 gate rows.
++    const int G = 4 * C;
++    for (int k0 = 0; k0 < G; k0 += 64) {
++      const int nv = (G - k0) >= 64 ? 8 : (G - k0) / 8;
++      __m256 ua[8], uh[8];
++      for (int v = 0; v < 8; ++v) { ua[v] = _mm256_setzero_ps(); uh[v] = _mm256_setzero_ps(); }
++      for (int r = 0; r < C; ++r) {
++        const __m256 av = _mm256_set1_ps(a[r]);
++        for (int v = 0; v < nv; ++v)
++          ua[v] = _mm256_fmadd_ps(_mm256_loadu_ps(wihT + r * G + k0 + 8 * v), av, ua[v]);
++      }
++      for (int r = 0; r < C; ++r) {
++        const __m256 hv = _mm256_set1_ps(hprev[r]);
++        for (int v = 0; v < nv; ++v)
++          uh[v] = _mm256_fmadd_ps(_mm256_loadu_ps(whhT + r * G + k0 + 8 * v), hv, uh[v]);
++      }
++      for (int v = 0; v < nv; ++v)
++        _mm256_storeu_ps(pre + k0 + 8 * v, _mm256_add_ps(_mm256_add_ps(ua[v], uh[v]),
++                                                         _mm256_loadu_ps(bg + k0 + 8 * v)));
++    }
++  }
++  for (int r = 0; r < C; r += 8) {
++    const __m256 vi = Sigmoid8(_mm256_loadu_ps(pre + 0 * C + r));
++    const __m256 vf = Sigmoid8(_mm256_loadu_ps(pre + 1 * C + r));
++    const __m256 vg = Tanh8(_mm256_loadu_ps(pre + 2 * C + r));
++    const __m256 vo = Sigmoid8(_mm256_loadu_ps(pre + 3 * C + r));
++    const __m256 cn = _mm256_fmadd_ps(vf, _mm256_loadu_ps(cprev + r),
++                                      _mm256_mul_ps(vi, vg));
++    const __m256 th = Tanh8(cn);
++    _mm256_storeu_ps(gi + r, vi);
++    _mm256_storeu_ps(gf + r, vf);
++    _mm256_storeu_ps(gg + r, vg);
++    _mm256_storeu_ps(go + r, vo);
++    _mm256_storeu_ps(c + r, cn);
++    _mm256_storeu_ps(tc + r, th);
++    _mm256_storeu_ps(h + r, _mm256_mul_ps(vo, th));
++  }
++  delta = DotPadded(wout, h, C) + bout;
++  const size_t n = sizeof(float) * (size_t)C;
++  const int o0 = nbuf * C;
++  std::memcpy(bx + (size_t)nbuf * (size_t)inw, x, sizeof(float) * (size_t)inw);
++  std::memcpy(bz + o0, z, n);   std::memcpy(bsg + o0, sg, n);
++  std::memcpy(ba + o0, a, n);   std::memcpy(bgi + o0, gi, n);
++  std::memcpy(bgf + o0, gf, n); std::memcpy(bgg + o0, gg, n);
++  std::memcpy(bgo + o0, go, n); std::memcpy(btc + o0, tc, n);
++  std::memcpy(bh + o0, h, n);   std::memcpy(bc + o0, c, n);
++}
++
++void Head::BackwardWindow() {
++  const int W = nbuf;
++  if (W <= 0) return;
++  if (agrp == 0) {
++    std::memset(gwin, 0, sizeof(float) * (size_t)(C * inw));
++    std::memset(gbin, 0, sizeof(float) * (size_t)C);
++    std::memset(gwih, 0, sizeof(float) * (size_t)(4 * C * C));
++    std::memset(gwhh, 0, sizeof(float) * (size_t)(4 * C * C));
++    std::memset(gbg, 0, sizeof(float) * (size_t)(4 * C));
++    std::memset(gwout, 0, sizeof(float) * (size_t)C);
++    gbout = 0.0f;
++  }
++  for (int r = 0; r < C; ++r) { dhn[r] = 0.0f; dcn[r] = 0.0f; }
++  for (int tt = W - 1; tt >= 0; --tt) {
++    const int o0 = tt * C;
++    const float dl = bdl[tt];
++    for (int r = 0; r < C; ++r) gwout[r] += dl * bh[o0 + r];
++    gbout += dl;
++    for (int r = 0; r < C; ++r) da[r] = dl * wout[r] + dhn[r];
++    const float* hprev_t = (tt > 0) ? (bh + o0 - C) : wsh;
++    const float* cprev_t = (tt > 0) ? (bc + o0 - C) : wsc;
++    for (int r = 0; r < C; ++r) {
++      const float th = btc[o0 + r];
++      const float go_ = bgo[o0 + r];
++      const float gf_ = bgf[o0 + r];
++      const float gi_ = bgi[o0 + r];
++      const float gg_ = bgg[o0 + r];
++      const float dc = da[r] * go_ * (1.0f - th * th) + dcn[r];
++      dpre[3 * C + r] = da[r] * th * go_ * (1.0f - go_);
++      dpre[0 * C + r] = dc * gg_ * gi_ * (1.0f - gi_);
++      dpre[2 * C + r] = dc * gi_ * (1.0f - gg_ * gg_);
++      dpre[1 * C + r] = dc * cprev_t[r] * gf_ * (1.0f - gf_);
++      dcn[r] = dc * gf_;
++    }
++    for (int r = 0; r < C; ++r) { da[r] = 0.0f; dhn[r] = 0.0f; }
++    const float* a_t = ba + o0;
++    for (int k = 0; k < 4 * C; ++k) {
++      const float d = dpre[k];
++      GateRowBack(gwih + k * C, gwhh + k * C, da, dhn, wih + k * C,
++                  whh + k * C, a_t, hprev_t, d, C);
++      gbg[k] += d;
++    }
++    const float* x_t = bx + (size_t)tt * (size_t)inw;
++    for (int r = 0; r < C; ++r) {
++      const float sv = bsg[o0 + r];
++      const float dz = da[r] * (sv + bz[o0 + r] * sv * (1.0f - sv));
++      AxpyNoFma(gwin + (size_t)r * (size_t)inw, x_t, dz, inw);
++      gbin[r] += dz;
++    }
++  }
++  ++agrp;
++  if (agrp >= accum) {
++    FinishGroup();
++    agrp = 0;
++    nvalid = 0;
++  }
++}
++
++// Same gradient as BackwardWindow (different, but fixed, summation order):
++// the per-step pass only propagates da/dhn (register-accumulated mat-vec)
++// and stores dpre/dz; the weight gradients are then accumulated as
++// register-tiled outer-product sums over the window.  This keeps the
++// accumulators out of the per-step loop, where they did not fit in L1.
++void Head::BackwardWindowFast() {
++  const int W = nbuf;
++  if (W <= 0) return;
++  if (agrp == 0) {
++    std::memset(gwin, 0, sizeof(float) * (size_t)(C * inw));
++    std::memset(gbin, 0, sizeof(float) * (size_t)C);
++    std::memset(gwih, 0, sizeof(float) * (size_t)(4 * C * C));
++    std::memset(gwhh, 0, sizeof(float) * (size_t)(4 * C * C));
++    std::memset(gbg, 0, sizeof(float) * (size_t)(4 * C));
++    std::memset(gwout, 0, sizeof(float) * (size_t)C);
++    gbout = 0.0f;
++  }
++  const int G = 4 * C;
++  for (int r = 0; r < C; ++r) { dhn[r] = 0.0f; dcn[r] = 0.0f; }
++  for (int tt = W - 1; tt >= 0; --tt) {
++    const int o0 = tt * C;
++    const float dl = bdl[tt];
++    for (int r = 0; r < C; ++r) da[r] = dl * wout[r] + dhn[r];
++    const float* cprev_t = (tt > 0) ? (bc + o0 - C) : wsc;
++    float* dp = bdp + (size_t)tt * G;
++    for (int r = 0; r < C; ++r) {
++      const float th = btc[o0 + r];
++      const float go_ = bgo[o0 + r];
++      const float gf_ = bgf[o0 + r];
++      const float gi_ = bgi[o0 + r];
++      const float gg_ = bgg[o0 + r];
++      const float dc = da[r] * go_ * (1.0f - th * th) + dcn[r];
++      dp[3 * C + r] = da[r] * th * go_ * (1.0f - go_);
++      dp[0 * C + r] = dc * gg_ * gi_ * (1.0f - gi_);
++      dp[2 * C + r] = dc * gi_ * (1.0f - gg_ * gg_);
++      dp[1 * C + r] = dc * cprev_t[r] * gf_ * (1.0f - gf_);
++      dcn[r] = dc * gf_;
++    }
++    // da = wih^T dp, dhn = whh^T dp, accumulated in registers over k.
++    for (int r0 = 0; r0 < C; r0 += 8) {
++      __m256 va = _mm256_setzero_ps(), vh = _mm256_setzero_ps();
++      for (int k = 0; k < G; ++k) {
++        const __m256 d = _mm256_set1_ps(dp[k]);
++        va = _mm256_fmadd_ps(_mm256_loadu_ps(wih + k * C + r0), d, va);
++        vh = _mm256_fmadd_ps(_mm256_loadu_ps(whh + k * C + r0), d, vh);
++      }
++      _mm256_storeu_ps(da + r0, va);
++      _mm256_storeu_ps(dhn + r0, vh);
++    }
++    for (int r = 0; r < C; ++r) {
++      const float sv = bsg[o0 + r];
++      bdz[o0 + r] = da[r] * (sv + bz[o0 + r] * sv * (1.0f - sv));
++    }
++  }
++  // Weight gradients: sums over the window in t order.
++  for (int tt = 0; tt < W; ++tt) {
++    const float dl = bdl[tt];
++    gbout += dl;
++    for (int r = 0; r < C; ++r) gwout[r] += dl * bh[tt * C + r];
++    for (int k = 0; k < G; ++k) gbg[k] += bdp[(size_t)tt * G + k];
++    for (int r = 0; r < C; ++r) gbin[r] += bdz[tt * C + r];
++  }
++  // gwih[k][r] += sum_t dp_t[k] a_t[r];  gwhh[k][r] += sum_t dp_t[k] h_{t-1}[r]
++  // (h_{-1} = wsh = 0 after the window reset, so t starts at 1 for gwhh).
++  for (int k0 = 0; k0 < G; k0 += 4) {
++    for (int r0 = 0; r0 < C; r0 += 8) {
++      __m256 ai[4], ah[4];
++      for (int q = 0; q < 4; ++q) {
++        ai[q] = _mm256_loadu_ps(gwih + (k0 + q) * C + r0);
++        ah[q] = _mm256_loadu_ps(gwhh + (k0 + q) * C + r0);
++      }
++      for (int tt = 0; tt < W; ++tt) {
++        const float* dp = bdp + (size_t)tt * G + k0;
++        const __m256 av = _mm256_loadu_ps(ba + tt * C + r0);
++        const __m256 hv = (tt > 0) ? _mm256_loadu_ps(bh + (tt - 1) * C + r0)
++                                   : _mm256_loadu_ps(wsh + r0);
++        for (int q = 0; q < 4; ++q) {
++          const __m256 d = _mm256_set1_ps(dp[q]);
++          ai[q] = _mm256_fmadd_ps(d, av, ai[q]);
++          ah[q] = _mm256_fmadd_ps(d, hv, ah[q]);
++        }
++      }
++      for (int q = 0; q < 4; ++q) {
++        _mm256_storeu_ps(gwih + (k0 + q) * C + r0, ai[q]);
++        _mm256_storeu_ps(gwhh + (k0 + q) * C + r0, ah[q]);
++      }
++    }
++  }
++  // gwin[r][j] += sum_t dz_t[r] x_t[j], tiles of 2 rows x 4 vectors.
++  for (int r = 0; r < C; r += 2) {
++    for (int j0 = 0; j0 < inw; j0 += 32) {
++      const int nv = (inw - j0) >= 32 ? 4 : (inw - j0) / 8;
++      __m256 a0[4], a1[4];
++      for (int v = 0; v < nv; ++v) {
++        a0[v] = _mm256_loadu_ps(gwin + r * inw + j0 + 8 * v);
++        a1[v] = _mm256_loadu_ps(gwin + (r + 1) * inw + j0 + 8 * v);
++      }
++      for (int tt = 0; tt < W; ++tt) {
++        const float* xt = bx + (size_t)tt * inw + j0;
++        const __m256 d0 = _mm256_set1_ps(bdz[tt * C + r]);
++        const __m256 d1 = _mm256_set1_ps(bdz[tt * C + r + 1]);
++        for (int v = 0; v < nv; ++v) {
++          const __m256 xv = _mm256_loadu_ps(xt + 8 * v);
++          a0[v] = _mm256_fmadd_ps(d0, xv, a0[v]);
++          a1[v] = _mm256_fmadd_ps(d1, xv, a1[v]);
++        }
++      }
++      for (int v = 0; v < nv; ++v) {
++        _mm256_storeu_ps(gwin + r * inw + j0 + 8 * v, a0[v]);
++        _mm256_storeu_ps(gwin + (r + 1) * inw + j0 + 8 * v, a1[v]);
++      }
++    }
++  }
++  ++agrp;
++  if (agrp >= accum) {
++    FinishGroup();
++    agrp = 0;
++    nvalid = 0;
++  }
++}
++
++void Head::FinishGroup() {
++  const int nw = C * inw, ng = 4 * C * C, nb = 4 * C;
++  if (nvalid > 0) {
++    const float sc = 1.0f / (float)nvalid;
++    for (int k = 0; k < nw; ++k) gwin[k] *= sc;
++    for (int k = 0; k < C; ++k) gbin[k] *= sc;
++    for (int k = 0; k < ng; ++k) gwih[k] *= sc;
++    for (int k = 0; k < ng; ++k) gwhh[k] *= sc;
++    for (int k = 0; k < nb; ++k) gbg[k] *= sc;
++    for (int k = 0; k < C; ++k) gwout[k] *= sc;
++    gbout *= sc;
++  }
++  double ss = 0.0;
++  for (int k = 0; k < nw; ++k) ss += (double)gwin[k] * (double)gwin[k];
++  for (int k = 0; k < C; ++k) ss += (double)gbin[k] * (double)gbin[k];
++  for (int k = 0; k < ng; ++k) ss += (double)gwih[k] * (double)gwih[k];
++  for (int k = 0; k < ng; ++k) ss += (double)gwhh[k] * (double)gwhh[k];
++  for (int k = 0; k < nb; ++k) ss += (double)gbg[k] * (double)gbg[k];
++  for (int k = 0; k < C; ++k) ss += (double)gwout[k] * (double)gwout[k];
++  ss += (double)gbout * (double)gbout;
++  std::uint64_t nb_bits;
++  std::memcpy(&nb_bits, &ss, sizeof nb_bits);
++  if (((nb_bits >> 52) & 0x7FFu) == 0x7FFu) { ++n_skipped; return; }
++  const double nrm = std::sqrt(ss);
++  if (nrm > (double)clip) {
++    const float sc = (float)((double)clip / nrm);
++    for (int k = 0; k < nw; ++k) gwin[k] *= sc;
++    for (int k = 0; k < C; ++k) gbin[k] *= sc;
++    for (int k = 0; k < ng; ++k) gwih[k] *= sc;
++    for (int k = 0; k < ng; ++k) gwhh[k] *= sc;
++    for (int k = 0; k < nb; ++k) gbg[k] *= sc;
++    for (int k = 0; k < C; ++k) gwout[k] *= sc;
++    gbout *= sc;
++  }
++  Apply();
++  Transpose();
++  ++n_steps;
++}
++
++void Head::Apply() {
++  Hyp hp;
++  hp.b1 = b1; hp.b2 = b2; hp.eps = eps;
++  b1t *= (double)b1;
++  b2t *= (double)b2;
++  hp.lr = (float)((double)lr * std::sqrt(1.0 - b2t) / (1.0 - b1t));
++  RowUpdate(wout, m1wout, m2wout, gwout, hp, C);
++  ScalarUpdate(&bout, &m1bout, &m2bout, gbout, hp);
++  for (int k = 0; k < 4 * C; ++k) {
++    RowUpdate(wih + k * C, m1wih + k * C, m2wih + k * C, gwih + k * C, hp, C);
++    RowUpdate(whh + k * C, m1whh + k * C, m2whh + k * C, gwhh + k * C, hp, C);
++    ScalarUpdate(bg + k, m1bg + k, m2bg + k, gbg[k], hp);
++  }
++  for (int r = 0; r < C; ++r) {
++    RowUpdate(win + r * inw, m1win + r * inw, m2win + r * inw, gwin + r * inw,
++              hp, inw);
++    ScalarUpdate(bin + r, m1bin + r, m2bin + r, gbin[r], hp);
++  }
++}
++
++// Builds the feature row, runs the forward pass, returns the clamped delta.
++float Head::Run(unsigned int base_p, float tlogit, const float* stage1,
++                int n_stage1, float m1raw) {
++  (void)base_p;
++  if (!g_built) { Build(n_stage1); g_built = true; }
++  if (n_stage1 != n1) {
++    std::fprintf(stderr, "BITL: stage-1 width changed %d -> %d\n", n1, n_stage1);
++    std::abort();
++  }
++  if (nbuf == 0) {
++    for (int r = 0; r < C; ++r) { h[r] = 0.0f; c[r] = 0.0f; }
++    std::memcpy(wsh, h, sizeof(float) * (size_t)C);
++    std::memcpy(wsc, c, sizeof(float) * (size_t)C);
++  }
++  std::memcpy(hprev, h, sizeof(float) * (size_t)C);
++  std::memcpy(cprev, c, sizeof(float) * (size_t)C);
++
++  t = tlogit;
++  const float inv_t = 1.0f / kTScale;
++  for (int j = 0; j < inw; ++j) x[j] = 0.0f;
++  int w = 0;
++  for (int j = 0; j < n1; ++j) {
++    if ((drop_mask >> j) & 1ULL) continue;
++    x[w++] = stage1[j];
++  }
++  x[n1keep + 0] = m1raw;
++  const float tl = tlogit * inv_t;
++  x[n1keep + 1] = tl;
++  x[n1keep + 2] = tl * tl;
++  x[n1keep + 3] = Sgn(tlogit);
++  x[n1keep + 4 + (int)(i & 7)] = 1.0f;
++  x[kPrev] = prev_bit;
++  if (nhid > 0 && aux_hid != nullptr && hidP != nullptr) {
++    const unsigned long long b = i >> 3;
++    if (b != hid_byte) {
++      hid_byte = b;
++      // hidC[r] = sum_cc P[r][cc] * hid[cc], accumulated in cc order per lane.
++      // all output blocks in one pass, even/odd cc partial sums
++      for (int r0 = 0; r0 < nhid; r0 += 32) {
++        const int nv = (nhid - r0) >= 32 ? 4 : (nhid - r0) / 8;
++        __m256 e[4], o[4];
++        for (int v = 0; v < 4; ++v) { e[v] = _mm256_setzero_ps(); o[v] = _mm256_setzero_ps(); }
++        int cc = 0;
++        for (; cc + 1 < aux_n_hid; cc += 2) {
++          const __m256 h0 = _mm256_set1_ps(aux_hid[cc]);
++          const __m256 h1 = _mm256_set1_ps(aux_hid[cc + 1]);
++          for (int v = 0; v < nv; ++v) {
++            e[v] = _mm256_fmadd_ps(_mm256_loadu_ps(hidP + cc * nhid + r0 + 8 * v), h0, e[v]);
++            o[v] = _mm256_fmadd_ps(_mm256_loadu_ps(hidP + (cc + 1) * nhid + r0 + 8 * v), h1, o[v]);
++          }
++        }
++        for (int v = 0; v < nv; ++v) _mm256_storeu_ps(hidC + r0 + 8 * v, _mm256_add_ps(e[v], o[v]));
++      }
++    }
++    for (int r = 0; r < nhid; ++r) x[kHid + r] = hidC[r];
++  }
++  Forward();
++  float d = delta;
++  if (d > clamp) d = clamp;
++  else if (d < -clamp) d = -clamp;
++  return d;
++}
++
++void Head::Learn(int bit) {
++  if (stats) {
++    // measurement only: code length of this bit under base and head p
++    const double pb = (bit ? pend_base : 65536 - pend_base) / 65536.0;
++    const double ph = (bit ? pend_head : 65536 - pend_head) / 65536.0;
++    win_base -= std::log2(pb); win_head -= std::log2(ph);
++    if (((i + 1) & ((1ULL << 23) - 1)) == 0) {
++      cost_base += win_base; cost_head += win_head;
++      std::fprintf(stderr, "BITL stats @%llu bytes: window gain %.0f B, total gain %.0f B (base %.0f B)\n",
++                   (i + 1) >> 3, (win_base - win_head) / 8, (cost_base - cost_head) / 8, cost_base / 8);
++      win_base = win_head = 0.0;
++    }
++  }
++  bdl[nbuf] = skip ? 0.0f : (Sigmoidf(t + delta) - (float)bit);
++  if (!skip) ++nvalid;
++  ++nbuf;
++  if (nbuf >= seq) {
++    if (fastbw) BackwardWindowFast(); else BackwardWindow();
++    nbuf = 0;
++  }
++  prev_bit = (float)bit;
++  ++i;
++}
++
++}  // namespace
++
++bool Init() {
++  g.Configure();
++  return true;
++}
++bool Enabled() { return g.enabled != 0; }
++int Mode() { return g.mode; }
++
++void SetAux(const float* hid, int n_hid) {
++  g.aux_hid = hid;
++  g.aux_n_hid = hid ? n_hid : 0;
++}
++
++__attribute__((noinline))
++unsigned int Adjust(unsigned int base_p, const float* stage1, int n_stage1,
++                    float m1raw, int override_active) {
++  const float p1 = (float)base_p / 65536.0f;
++  const float t = std::log(p1 / (1.0f - p1));
++  const float d = g.Run(base_p, t, stage1, n_stage1, m1raw);
++  g.skip = override_active ? 1 : 0;
++  g.pend_base = g.pend_head = base_p;
++  if (override_active) return base_p;
++  const float pnew = Sigmoidf(t + d);
++  unsigned int q = (unsigned int)(1.0f + 65534.0f * pnew);
++  if (q < 1) q = 1;
++  if (q > 65535) q = 65535;
++  g.pend_head = q;
++  return q;
++}
++
++__attribute__((noinline))
++void Observe(int bit) {
++  g.Learn(bit);
++}
++
++__attribute__((noinline))
++float PredictInput(const float* stage1, int n_stage1, int override_active) {
++  // t = 0, m1raw = 0: the head is a standalone recurrent predictor over the
++  // stage-1 row; its logit goes to the final mixer.
++  const float d = g.Run(32768, 0.0f, stage1, n_stage1, 0.0f);
++  g.skip = override_active ? 1 : 0;
++  return d;
++}
++
++__attribute__((noinline))
++void ObserveInput(int bit) { g.Learn(bit); }
++
++void Report() {
++  if (!g_built) return;
++  std::fprintf(stderr, "BITL: %llu bits, %llu optimizer steps, %llu skipped\n",
++               g.i, g.n_steps, g.n_skipped);
++}
++
++}  // namespace bit_head
+diff --git a/src/bit_head.h b/src/bit_head.h
+new file mode 100644
+index 0000000..dc0c51c
+--- /dev/null
++++ b/src/bit_head.h
+@@ -0,0 +1,53 @@
++#ifndef BIT_HEAD_H_
++#define BIT_HEAD_H_
++
++// [sub100mil E3] BITLSTM: a small LSTM that corrects the final bit probability
++// in logit space, immediately before the arithmetic coder:
++//
++//     x -> in_proj -> SiLU -> LSTMCell(C) -> linear(1) -> delta
++//     t = ln(p/(1-p));  p' = sigmoid(t + delta)
++//
++// Ported from cmix-neif-1.0 src/bit_head.{h,cpp} (marwoelk, GPL-3.0-only),
++// whose form, AVX2 kernels and several input features come from the
++// bitlstm32 head of cmix-obias (David Freelan, GPL-3.0).  This port is
++// ONLINE-ONLY: deterministic splitmix64 initialisation, output layer zero
++// (exact no-op on the first bit), Adam with buffered truncated BPTT, no
++// trained weights.
++//
++// Determinism: one translation unit compiled WITHOUT fast-math and with
++// -ffp-contract=off (makefile rule bit_head.o), noinline entry points, fixed
++// reduction order.  The configuration is read once from the environment in
++// Init() (BITL_*), so encoder and decoder must run with the same environment.
++//
++// The rest of the predictor never sees the corrected probability.
++
++namespace bit_head {
++
++// Reads the configuration (BITL_* env) and builds the head.  n_hid = width of
++// the transformer state vector registered with SetAux (0 = none).
++bool Init();
++bool Enabled();
++
++// Registers the per-byte transformer state vector (192 floats, stable
++// pointer); nullptr = no transformer (the block is fed zeros).
++void SetAux(const float* hid, int n_hid);
++
++// One call per coded bit, after base_p = Discretize(Predict()).
++// stage1/n_stage1 = the final mixer's input row, m1raw = raw final mixer
++// output (logit), override_active = byte-mixer 0/1 override.
++unsigned int Adjust(unsigned int base_p, const float* stage1, int n_stage1,
++                    float m1raw, int override_active);
++// Learns from the coded bit; exactly one call after each Adjust().
++void Observe(int bit);
++
++// Logit-domain output of the head (mode 1 = extra final-mixer input):
++// a standalone prediction from the stage-1 row, returned as a stretched value.
++float PredictInput(const float* stage1, int n_stage1, int override_active);
++void ObserveInput(int bit);
++
++int Mode();
++void Report();
++
++}  // namespace bit_head
++
++#endif
+diff --git a/src/coder/decoder.cpp b/src/coder/decoder.cpp
+index 19854a4..170ade5 100644
+--- a/src/coder/decoder.cpp
++++ b/src/coder/decoder.cpp
+@@ -1,4 +1,5 @@
+ #include "decoder.h"
++#include "../bit_head.h"
+ 
+ Decoder::Decoder(std::ifstream* is, Predictor* p) : is_(is), x1_(0),
+     x2_(0xffffffff), x_(0), p_(p) {
+@@ -18,7 +19,10 @@ unsigned int Decoder::Discretize(float p) {
+ }
+ 
+ int Decoder::Decode() {
+-  const unsigned int p = Discretize(p_->Predict());
++  unsigned int p = Discretize(p_->Predict());
++  const bool bitl = p_->BitlPost();
++  if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
++                                 p_->bitl_m1raw_, p_->bitl_override_);
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   int bit = 0;
+@@ -28,6 +32,7 @@ int Decoder::Decode() {
+   } else {
+     x1_ = xmid + 1;
+   }
++  if (bitl) bit_head::Observe(bit);
+   p_->Perceive(bit);
+ 
+   while (((x1_^x2_) & 0xff000000) == 0) {
+diff --git a/src/coder/encoder.cpp b/src/coder/encoder.cpp
+index 16a33c7..f49f9a5 100644
+--- a/src/coder/encoder.cpp
++++ b/src/coder/encoder.cpp
+@@ -1,4 +1,5 @@
+ #include "encoder.h"
++#include "../bit_head.h"
+ 
+ Encoder::Encoder(std::ofstream* os, Predictor* p) : os_(os), x1_(0),
+     x2_(0xffffffff), p_(p) {}
+@@ -12,7 +13,10 @@ unsigned int Encoder::Discretize(float p) {
+ }
+ 
+ void Encoder::Encode(int bit) {
+-  const unsigned int p = Discretize(p_->Predict());
++  unsigned int p = Discretize(p_->Predict());
++  const bool bitl = p_->BitlPost();
++  if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
++                                 p_->bitl_m1raw_, p_->bitl_override_);
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   if (bit) {
+@@ -20,6 +24,7 @@ void Encoder::Encode(int bit) {
+   } else {
+     x1_ = xmid + 1;
+   }
++  if (bitl) bit_head::Observe(bit);
+   p_->Perceive(bit);
+ 
+   while (((x1_^x2_) & 0xff000000) == 0) {
+@@ -30,6 +35,7 @@ void Encoder::Encode(int bit) {
+ }
+ 
+ void Encoder::Flush() {
++  bit_head::Report();
+   while (((x1_^x2_) & 0xff000000) == 0) {
+     WriteByte(x2_ >> 24);
+     x1_ <<= 8;
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index c5762d2..7911160 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -1,4 +1,5 @@
+ #include "predictor.h"
++#include "bit_head.h"
+ #include <vector>
+ #include <stdlib.h>
+ #include <stdio.h>
+@@ -296,6 +297,12 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     AddPPMD();
+     return;
+   }
++  // [sub100mil E3] BITLSTM head: configuration from BITL_* env, transformer
++  // state (192-d normalised final hidden) as its per-byte side input.
++  bit_head::Init();
++  bit_head::SetAux(transformer_ ? transformer_->last_hidden() : nullptr, 192);
++  bitl_on_ = bit_head::Enabled();
++  bitl_mode_ = bit_head::Mode();
+   AddBracket();
+   // With load_transformer_probs the ppmd is not run: its mixer input is a
+   // constant and the transformer's distributions come from the file.
+@@ -464,6 +471,8 @@ void Predictor::AddMixers() {
+   AddMixer(0, manager_.mx15, 0.005);
+ 
+   input_size = mixer_0_.size() + auxiliary_size_;
++  // [sub100mil E3] mode 1: the head's logit is one more final-mixer input
++  if (bitl_on_ && bitl_mode_ == 1) ++input_size;
+   layers_[1].SetNumModels(input_size);
+ 
+   AddMixer(1,manager_.zero_context_, 0.0003);
+@@ -553,8 +562,16 @@ float Predictor::Predict() {
+   }
+   layers_[1].SetStretchedInput(mixer_0_.size(), layers_[0].Inputs()[fxcm_model_index]);
+   layers_[1].SetStretchedInput(mixer_0_.size() + 1, layers_[0].Inputs()[byte_mixer_index]);
++  bitl_stage1_ = &layers_[1].Inputs()[0];
++  bitl_n_stage1_ = (int)(mixer_0_.size() + auxiliary_size_);
++  bitl_override_ = (byte_mixer_override >= 0) ? 1 : 0;
++  if (bitl_on_ && bitl_mode_ == 1) {
++    layers_[1].SetStretchedInput(mixer_0_.size() + 2,
++        bit_head::PredictInput(bitl_stage1_, bitl_n_stage1_, bitl_override_));
++  }
+ 
+-  p = Sigmoid::Logistic(mixer_1_[0].Mix());
++  bitl_m1raw_ = mixer_1_[0].Mix();
++  p = Sigmoid::Logistic(bitl_m1raw_);
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
+   if (byte_mixer_override >= 0) {
+@@ -731,6 +748,7 @@ void Predictor::Perceive(int bit) {
+   }
+ 
+   { PROF(SSE_); sse_.Perceive(bit); }
++  if (bitl_on_ && bitl_mode_ == 1) bit_head::ObserveInput(bit);
+ 
+   bool byte_update = false;
+   if (manager_.bit_context_ >= 128) byte_update = true;
+diff --git a/src/predictor.h b/src/predictor.h
+index 12d7c01..b62965e 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -128,6 +128,14 @@ class Predictor {
+   void Perceive(int bit);
+   void Pretrain(int bit);
+ 
++  // [sub100mil E3] BITLSTM hand-over (valid between Predict() and Perceive()).
++  bool BitlPost() const { return bitl_on_ && bitl_mode_ == 0 &&
++                                 !ppmd_only_ && !transformer_only_; }
++  const float* bitl_stage1_ = nullptr;
++  int bitl_n_stage1_ = 0;
++  float bitl_m1raw_ = 0.0f;
++  int bitl_override_ = 0;
++
+  private:
+   unsigned long long GetNumModels();
+   void AddMixer(int layer, const unsigned long long& context,
+@@ -164,6 +172,8 @@ class Predictor {
+   std::vector<bool> vocab_;
+   std::optional<FXCM> fxcm_model_;
+   bool ppmd_only_ = false;
++  bool bitl_on_ = false;
++  int bitl_mode_ = 0;
+   bool transformer_only_ = false;
+   unsigned int vocab_size_ = 0;
+   std::vector<int> vocab_bytes_;  // byte values in the vocabulary, ascending
