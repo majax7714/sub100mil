@@ -1,0 +1,290 @@
+diff --git a/src/models/byte-model.cpp b/src/models/byte-model.cpp
+index 8ac0c33..7b7a07c 100644
+--- a/src/models/byte-model.cpp
++++ b/src/models/byte-model.cpp
+@@ -17,6 +17,9 @@ ByteModel::ByteModel(const std::vector<bool>& vocab) : ex(0),top_(255), mid_(0),
+         ex = i;
+       }
+     }
++#ifdef E1CONF
++  exconf = denom > 0 ? max_prob_val / denom : 1.0f;
++#endif
+   if (denom == 0) outputs_[0] = 0.5;
+   else outputs_[0] = num / denom;
+   return outputs_;
+diff --git a/src/models/byte-model.h b/src/models/byte-model.h
+index 11af112..91a9f8b 100644
+--- a/src/models/byte-model.h
++++ b/src/models/byte-model.h
+@@ -14,6 +14,9 @@ class ByteModel : public Model {
+    std::valarray<float>& Predict() ;
+   void Perceive(int bit);
+   int ex;
++#ifdef E1CONF
++  float exconf = 1.0f;  // [E1] P(top byte | bits so far): max prob / remaining mass
++#endif
+  protected:
+   void ByteUpdate();
+   int top_, mid_, bot_;
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index c5762d2..ace81dd 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -321,6 +321,9 @@ unsigned long long Predictor::GetNumModels() {
+   num += 1;  // ppmd byte model (a constant input with
+              // --load-transformer-probs)
+   num += byte_mixer_->NumOutputs();
++#if defined(E1CONF) && defined(E1_GATE)
++  num += E1_GATE == 2 ? 20 : E1_GATE == 3 ? 28 : E1_GATE == 4 ? 80 : 16;
++#endif
+   return num;
+ }
+ 
+@@ -443,7 +446,11 @@ void Predictor::AddMixers() {
+   AddMixer(0, manager_.mx10, 0.0005); 
+   AddMixer(0, manager_.mx11, 0.005); 
+   AddMixer(0, manager_.mx12, 0.0005); 
++#ifdef E1_MX13
++  AddMixer(0, e1_mx_, 0.005);
++#else
+   AddMixer(0, manager_.mx13, 0.005); 
++#endif
+   AddMixer(0, manager_.mxx, 0.001);
+   AddMixer(0, manager_.recent_bytes_[2], 0.002);
+   AddMixer(0, manager_.line_break_, 0.0007);
+@@ -462,11 +469,25 @@ void Predictor::AddMixers() {
+   AddMixer(0, manager_.mx16, 0.005);
+   AddMixer(0, manager_.mx14, 0.005);
+   AddMixer(0, manager_.mx15, 0.005);
++#ifdef E1_MIXNEW
++  AddMixer(0, e1_mx_, E1_MIXNEW_LR);
++#endif
+ 
+   input_size = mixer_0_.size() + auxiliary_size_;
+   layers_[1].SetNumModels(input_size);
+ 
++#ifdef E1_MIX1
++  AddMixer(1, e1_ctx_, 0.0003);
++#else
+   AddMixer(1,manager_.zero_context_, 0.0003);
++#endif
++#ifdef E1_APM
++#if E1_APM == 2
++  e1_apm_.emplace(64 * 256);
++#else
++  e1_apm_.emplace(64 * 8);
++#endif
++#endif
+ 
+   layers_[0].SetExtraInputSize(mixer_0_.size());
+ 
+@@ -538,6 +559,27 @@ float Predictor::Predict() {
+   if (byte_mixer_output == 0 || byte_mixer_output == 1) byte_mixer_override = byte_mixer_output;
+   layers_[0].SetInput(input_index++, byte_mixer_output);
+   auto byte_mixer_index = input_index - 1;
++#ifdef E1_GATE
++  {
++    float sb = layers_[0].Inputs()[byte_mixer_index];
++    for (int k = 0; k < 16; ++k) layers_[0].SetStretchedInput(input_index + k, k == e1_cb_ ? sb : 0.0f);
++    input_index += 16;
++#if E1_GATE == 2 || E1_GATE == 3
++    for (int k = 0; k < 4; ++k) layers_[0].SetStretchedInput(input_index + k, k == e1_bb_ ? sb : 0.0f);
++    input_index += 4;
++#endif
++#if E1_GATE == 3
++    for (int k = 0; k < 4; ++k) layers_[0].SetStretchedInput(input_index + k, k == e1_bh_ ? sb : 0.0f);
++    input_index += 4;
++    for (int k = 0; k < 4; ++k) layers_[0].SetStretchedInput(input_index + k, k == e1_bm_ ? sb : 0.0f);
++    input_index += 4;
++#endif
++#if E1_GATE == 4
++    for (int k = 0; k < 64; ++k) layers_[0].SetStretchedInput(input_index + k, k == (int)e1_ctx_ ? sb : 0.0f);
++    input_index += 64;
++#endif
++  }
++#endif
+ 
+   float auxiliary_average = Sigmoid::Logistic(layers_[0].Inputs()[fxcm_model_index]) + Sigmoid::Logistic(layers_[0].Inputs()[byte_mixer_index]);
+   auxiliary_average /= auxiliary_size_;
+@@ -557,6 +599,18 @@ float Predictor::Predict() {
+   p = Sigmoid::Logistic(mixer_1_[0].Mix());
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
++#ifdef E1_APM
++  {
++#if E1_APM == 2
++    int cx = e1_ctx_ * 256 + manager_.long_bit_context_;
++#else
++    int cx = e1_ctx_ * 8 + e1_bpos_;
++#endif
++    float st = sigmoid_.Logit(p);
++    float pa = e1_apm_->Pp(st, cx);
++    p = (p * (4 - E1_APM_W) + pa * E1_APM_W) * 0.25f;
++  }
++#endif
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -646,7 +700,59 @@ void Predictor::TransformerByteUpdate() {
+   // With --transformer-only there is no byte mixer: probs_scratch_ is the
+   // final destination of the distribution (and what the loss is measured on).
+   if (byte_mixer_) byte_mixer_->SetProbs(probs_scratch_.data());
++#ifdef E1CONF
++  {
++    // [E1] byte-level confidence of the distribution just handed downstream
++    float sum = 0, m1 = -1, m2 = -1;
++    int i1 = 0;
++    for (unsigned int i = 0; i < vocab_size_; ++i) {
++      float v = probs_scratch_[i];
++      sum += v;
++      if (v > m1) { m2 = m1; m1 = v; i1 = i; }
++      else if (v > m2) m2 = v;
++    }
++    e1_top1_ = vocab_bytes_[i1];
++    float p1 = m1 / sum;
++    int b_top = p1 > 0.95f ? 0 : p1 > 0.8f ? 1 : p1 > 0.5f ? 2 : 3;
++    float mg = (m1 - m2) / sum;  // top-1 / top-2 margin
++    int b_mg = mg > 0.9f ? 0 : mg > 0.6f ? 1 : mg > 0.25f ? 2 : 3;
++    int b_h = 0;
++#if E1_BB == 1 || (defined(E1_GATE) && E1_GATE >= 3)
++    // entropy in bits
++    float h = 0;
++    for (unsigned int i = 0; i < vocab_size_; ++i) {
++      float q = probs_scratch_[i] / sum;
++      h -= q * std::log2(q);
++    }
++    b_h = h < 0.25f ? 0 : h < 1.0f ? 1 : h < 2.5f ? 2 : 3;
++#endif
++#if E1_BB == 1
++    e1_bb_ = b_h;
++#elif E1_BB == 2
++    e1_bb_ = b_mg;
++#else
++    e1_bb_ = b_top;
++#endif
++    e1_bh_ = b_h;
++    e1_bm_ = b_mg;
++  }
++#endif
++}
++
++#ifdef E1CONF
++// [E1] per-bit confidence context, computed after the byte mixer has
++// predicted the next bit (so byte_mixer_->ex/exconf describe it).
++void Predictor::E1Update() {
++  float tc = byte_mixer_->exconf;
++  int q = tc < 0.3f ? 0 : tc < 0.5f ? 1 : tc < 0.7f ? 2 : tc < 0.85f ? 3 :
++      tc < 0.95f ? 4 : tc < 0.99f ? 5 : tc < 0.998f ? 6 : 7;
++  int alive = byte_mixer_->ex == e1_top1_;
++  int cb = q * 2 + alive;          // 16 per-bit buckets
++  e1_cb_ = cb;
++  e1_ctx_ = cb * 4 + e1_bb_;        // x 4 byte-level buckets = 64
++  e1_mx_ = (unsigned long long)cb * 256 + manager_.long_bit_context_;
+ }
++#endif
+ 
+ // Accumulates -ln p(byte) for the byte that just completed, where p is the
+ // distribution (normalized over the vocabulary) the byte mixer used to
+@@ -731,6 +837,9 @@ void Predictor::Perceive(int bit) {
+   }
+ 
+   { PROF(SSE_); sse_.Perceive(bit); }
++#ifdef E1_APM
++  e1_apm_->Update(bit, E1_APM_RATE);
++#endif
+ 
+   bool byte_update = false;
+   if (manager_.bit_context_ >= 128) byte_update = true;
+@@ -787,6 +896,10 @@ void Predictor::Perceive(int bit) {
+   lstmex=byte_mixer_->ex;
+   { PROF(FXCM); fxcm_model_->Perceive(bit); }
+   if (byte_update)manager_.bit_context_ = 1;
++#ifdef E1CONF
++  e1_bpos_ = byte_update ? 0 : e1_bpos_ + 1;
++  E1Update();
++#endif
+ }
+ 
+ void Predictor::Pretrain(int bit) {
+diff --git a/src/predictor.h b/src/predictor.h
+index 12d7c01..fc1f620 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -120,6 +120,50 @@ class HalfFileReader {
+   FILE* file_;
+ };
+ 
++
++#ifdef E1CONF
++#ifndef E1_APM_RATE
++#define E1_APM_RATE 0.02f
++#endif
++#ifndef E1_APM_W
++#define E1_APM_W 2
++#endif
++#ifndef E1_MIXNEW_LR
++#define E1_MIXNEW_LR 0.002f
++#endif
++// [E1] Transformer-confidence contexts. Variants (compile-time):
++//   E1_MIX1   final (layer-1) mixer weight set selected by the confidence context
++//   E1_MX13   layer-0 mixer mx13 (context = partial byte) gets confidence*256 + partial byte
++//   E1_MIXNEW extra layer-0 mixer, context = confidence*256 + partial byte
++//   E1_GATE   transformer stretch(p) copied into one of 16 (=1) or 16+4 (=2) gated
++//             layer-0 inputs selected by the confidence buckets (others 0);
++//             =3 adds 4 entropy- and 4 margin-gated, =4: 16 + 64 (per-bit x top1-prob)
++//   E1_APM    extra APM after the SSE, context = confidence (x bpos or x partial byte)
++// Interpolating APM over the stretched probability, 49 knots on [-12, 12].
++struct E1Apm {
++  std::vector<float> t;
++  int idx = 0;
++  float w = 0;
++  explicit E1Apm(int contexts) : t((size_t)contexts * 49) {
++    for (int c = 0; c < contexts; ++c)
++      for (int j = 0; j < 49; ++j) t[(size_t)c * 49 + j] = Sigmoid::Logistic((j - 24) * 0.5f);
++  }
++  float Pp(float st, int cx) {
++    if (st < -11.999f) st = -11.999f;
++    if (st > 11.999f) st = 11.999f;
++    float x = (st + 12.0f) * 2.0f;
++    int lo = (int)x;
++    w = x - lo;
++    idx = cx * 49 + lo;
++    return t[idx] * (1 - w) + t[idx + 1] * w;
++  }
++  void Update(int y, float rate) {
++    t[idx] += (y - t[idx]) * rate * (1 - w);
++    t[idx + 1] += (y - t[idx + 1]) * rate * w;
++  }
++};
++#endif
++
+ class Predictor {
+  public:
+   Predictor(const std::vector<bool>& vocab,
+@@ -144,6 +188,9 @@ class Predictor {
+   void LoadTransformerProbs();
+   void AccumulateTransformerLoss();
+   void TransformerByteUpdate();
++#ifdef E1CONF
++  void E1Update();
++#endif
+ 
+   llvm::SmallVector<Indirect<Nonstationary>, 30-7> indirect_ns_models_; // non-stationary
+   llvm::SmallVector<Indirect<RunMap>, 1> indirect_r_models_; // run map
+@@ -190,6 +237,16 @@ class Predictor {
+   // training data loader's split_article_lengths; each piece is a fresh
+   // transformer context.
+   unsigned long long article_tokens_ = 0;
++#ifdef E1CONF
++  unsigned long long e1_ctx_ = 0;  // confidence context (E1_NCTX values)
++  unsigned long long e1_mx_ = 0;   // confidence bucket * 256 + partial byte
++  int e1_top1_ = -1;               // byte value of the transformer's top-1 for this byte
++  int e1_bb_ = 0;                  // byte-level confidence bucket
++  int e1_bpos_ = 0;
++  int e1_bh_ = 0, e1_bm_ = 0;     // entropy / margin buckets
++  int e1_cb_ = 0;                  // per-bit bucket (16)
++  std::optional<E1Apm> e1_apm_;
++#endif
+ };
+ 
+ #endif
