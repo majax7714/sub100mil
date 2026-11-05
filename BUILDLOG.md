@@ -12,6 +12,22 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: E11 in-article cache model is a NO-GO, but the closest miss so far (about 60 KB)
+- **Type:** model addition (non-transformer), tested offline only
+- **Did:** Simulated in-article caches over WRT tokens (unigram, recency-decayed unigram, bigram, trigram, rare-token unigram; reset at every
+  `<page>`), mixed per bit with the record's probabilities from A1's cost dumps, the same method as A2. Contrasted with whole-file caches.
+  Scripts `scripts/analysis/e11_*`; write-up docs/design/E11-in-article-cache.md; attic `attic/2026-11-05-E11-in-article-cache/` (commit 45a62cd).
+- **Numbers:** best variant 10M +702 B (0.056%), 1M +30 B. Whole-file caches −117 to +38 B. Projected to enwik9: **about 60 KB (45–90 KB),
+  an estimate**, against the 100 KB bar. Cost would be fine: about 0.2 h, ≤50 MB. No ledger rows (no archive produced).
+- **Learned:**
+  - Only the in-article restriction helps, which agrees with A1.
+  - The gain is on in-article *repeats* of *rare* tokens (1–3% of their bits). Common tokens gain about 0, and first uses in an article lose.
+  - The record pays 5.8 bits for a token used once before in the article; the cache pays 8.8 even when told the token is in it. Oracle ceiling
+    on 10M: 17.3 KB.
+  - A2 and E11 both point to the same signal, in-article recall of rare, bursty tokens, which E10 and E2 also go after.
+- **Next:** rerun `e11_sim` on a cost dump of the E10 or C1 build. If E11 still adds ≥0.05% on top of dynamic evaluation, build it into the
+  compressor with the cache state as mixer selector contexts. Otherwise close it.
+
 ## 2026-11-05: A2 link-target model is a NO-GO (about 17 KB at full scale)
 - **Type:** architectural (specialist model), tested offline only
 - **Did:** Simulated a link-target candidate model (prefix tries over earlier link targets, titles and same-article links) mixed per bit with
