@@ -33,10 +33,10 @@ index 581fee1..0ad32c5 100644
    int layer2kimi[NL] = {};
    int layer2van[NL] = {};
 diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
-index 85773ba..c619d3d 100644
+index 85773ba..ba8c2ab 100644
 --- a/cpp_infer/src/opt/model_opt.cpp
 +++ b/cpp_infer/src/opt/model_opt.cpp
-@@ -267,6 +267,171 @@ struct TransformerOptImpl {
+@@ -267,6 +267,185 @@ struct TransformerOptImpl {
    alignas(64) float probs208[208] = {};
    alignas(32) float sfall[32] = {}, cfall[32] = {};  // rope fallback row
  
@@ -69,24 +69,31 @@ index 85773ba..c619d3d 100644
 +  // FW forward for block b (b = 0 runs first and clears fw_dx): h = q768 * s
 +  // over the nonzero relu^2 codes, dx += dW_b[:, i] h_i (ex-girlfriend
 +  // fw_apply). Fixed op order.
-+  void fw_apply(int b, float s) {
-+    int nnz = 0;
++  // nz/nnz: qgemv_relu2q's ascending nonzero index list of q768.
++  void fw_apply(int b, float s, const uint16_t* nz, int nnz) {
 +    uint16_t* const idx = fw_idx[b];
 +    float* const h = fw_h[b];
-+    for (int i = 0; i < DMLP; i++) {
-+      if (q768[i] == 0) continue;
-+      idx[nnz] = uint16_t(i);
-+      h[nnz] = float(q768[i]) * s;
-+      nnz++;
++    for (int k = 0; k < nnz; k++) {
++      idx[k] = nz[k];
++      h[k] = float(q768[nz[k]]) * s;
 +    }
 +    fw_nnz[b] = nnz;
 +    if (b == 0)
 +      for (int j = 0; j < D; j++) fw_dx[j] = 0.0f;
 +    const float* const dWb = fw_dW.data() + size_t(b) * DMLP * D;
-+    for (int k = 0; k < nnz; k++) {
-+      const float* col = dWb + size_t(idx[k]) * D;
-+      const float hv = h[k];
-+      for (int j = 0; j < D; j++) fw_dx[j] += col[j] * hv;
++    // register-blocked fw_dx[j] = fma(col[j], h, fw_dx[j]) over k in order
++    // (bit-identical to the plain loop, which g++ contracts to the same FMA)
++    for (int half = 0; half < 2; half++) {
++      const int j0 = half * 96;
++      __m256 a[12];
++      for (int r = 0; r < 12; r++) a[r] = _mm256_load_ps(fw_dx + j0 + 8 * r);
++      for (int k = 0; k < nnz; k++) {
++        const float* col = dWb + size_t(idx[k]) * D + j0;
++        const __m256 hv = _mm256_set1_ps(h[k]);
++        for (int r = 0; r < 12; r++)
++          a[r] = _mm256_fmadd_ps(_mm256_loadu_ps(col + 8 * r), hv, a[r]);
++      }
++      for (int r = 0; r < 12; r++) _mm256_store_ps(fw_dx + j0 + 8 * r, a[r]);
 +    }
 +  }
 +
@@ -154,12 +161,19 @@ index 85773ba..c619d3d 100644
 +    if (e2.fwk == 0) return;
 +    // back through the frozen unembedding (float copy) and the RMS norm
 +    alignas(64) float gxn[D];
-+    for (int i = 0; i < D; i++) gxn[i] = 0.0f;
 +    const float* U = M.unembed_f32.data();
-+    for (int o = 0; o < V; o++) {
-+      const float g = dl[o];
-+      const float* row = U + size_t(o) * D;
-+      for (int i = 0; i < D; i++) gxn[i] += row[i] * g;
++    // register-blocked gxn[i] = fma(row[i], g, gxn[i]) over o in order
++    for (int half = 0; half < 2; half++) {
++      const int i0 = half * 96;
++      __m256 a[12];
++      for (int r = 0; r < 12; r++) a[r] = _mm256_setzero_ps();
++      for (int o = 0; o < V; o++) {
++        const float* row = U + size_t(o) * D + i0;
++        const __m256 g = _mm256_set1_ps(dl[o]);
++        for (int r = 0; r < 12; r++)
++          a[r] = _mm256_fmadd_ps(_mm256_loadu_ps(row + 8 * r), g, a[r]);
++      }
++      for (int r = 0; r < 12; r++) _mm256_store_ps(gxn + i0 + 8 * r, a[r]);
 +    }
 +    float m = 0.0f;
 +    for (int i = 0; i < D; i++) m += gxn[i] * fw_xn[i];
@@ -208,15 +222,16 @@ index 85773ba..c619d3d 100644
    explicit TransformerOptImpl(const char* path, AttnKind k) : kind(k) {
      M.load(path);
      const size_t kda_sz = sizeof(KdaState) * 9;
-@@ -486,6 +651,7 @@ struct TransformerOptImpl {
+@@ -486,6 +665,8 @@ struct TransformerOptImpl {
        else
          qsparse4_add(mm.down, q768, idx768, nnz, x);
      }
-+    if (e2.fwk > 0 && l >= NL - e2.fwk) fw_apply(l - (NL - e2.fwk), mm.down_s_act);
++    if (e2.fwk > 0 && l >= NL - e2.fwk)
++      fw_apply(l - (NL - e2.fwk), mm.down_s_act, idx768, nnz);
    }
  
    // prior must be the cap-208 internal buffer with pads [205..208) zeroed
-@@ -537,11 +703,14 @@ struct TransformerOptImpl {
+@@ -537,11 +718,14 @@ struct TransformerOptImpl {
        PSCOPE(PS_MM_UNEMB);
        qgemv_f32(M.unembed.m, q5, logits);  // rows_padded 208
      }
@@ -231,7 +246,7 @@ index 85773ba..c619d3d 100644
      t++;
    }
  };
-@@ -572,5 +741,9 @@ const float* TransformerOpt::last_logits() const { return impl->logits; }
+@@ -572,5 +756,9 @@ const float* TransformerOpt::last_logits() const { return impl->logits; }
  
  AttnKind TransformerOpt::attn_kind() const { return impl->kind; }
  
