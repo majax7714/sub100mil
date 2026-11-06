@@ -66,6 +66,12 @@ by this copy's unmodified build) and 10M 1,264,682.
 | fw1lo+logit | both learners in one second head | 126,211 | −262 | | |
 | fw4vlo | FW4, κ 0.8e-3→0.2e-3 | cancelled (slot starvation; FW4 is unaffordable anyway) | | | |
 
+**100M (enwik9_100M = enwik8), 2026-11-06, logit head** (same settings as its 10M row, `E2_LOGIT=1`, build from the
+committed patch, `cmix_e2c`): **11,988,349 B (0.9591 bpb) vs the record's 12,006,323 B (0.9605 bpb) on the same
+slice: −17,974 B (−0.150%)**. Both round-tripped. The relative gain shrinks slowly with length: −0.17% (1M),
+−0.168% (10M), −0.150% (100M). Peak RSS 6,557 MiB for both (5,797 at 10M). Wall times (record 21,482 / 16,605 s,
+logit 11,687 / 11,624 s) were taken under different contention and say nothing about E2's cost.
+
 Proxy (`--transformer-only`; the second head's own loss, in nats/token, vs the static head; no mixers). This was used
 to choose rates:
 
@@ -119,7 +125,7 @@ modest.
 - **Full-enwik9 extrapolation (ESTIMATE, speculative):** −0.17% of the record's 96,996,198 B archive is about
   −165 KB for about 1 h. That is the same order as ex-girlfriend's −135 KB on neif. Slice caveats apply: the
   transformer's share of the bits is larger on a cold-CM slice, so the full-file gain is probably smaller.
-- **Confirmation needed:** a 100M (enwik8) run of the logit head, then a full run, before it goes into a combined
+- **100M done** (−0.150%, see Results); still needed: a full run before it goes into a combined
   build.
 
 ## What to try next
