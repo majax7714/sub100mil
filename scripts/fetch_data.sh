@@ -5,7 +5,8 @@
 #
 # Layout (relative to repo root):
 #   data/raw/enwik9.zip, data/raw/enwik9
-#   data/slices/enwik9_1M, enwik9_10M, enwik9_100M (== enwik8), enwik9_mid10M
+#   data/slices/enwik9_1M, enwik9_10M, enwik9_100M (== enwik8), enwik9_mid10M,
+#               enwik9_mid10M_pa, enwik9_mid1M_pa (page-aligned mid slices, see below)
 #   data/slices/enwik8 -> enwik9_100M (symlink)
 #   data/CHECKSUMS.sha256
 #
@@ -91,7 +92,11 @@ make_slice() {
 make_slice enwik9_1M        0          1000000
 make_slice enwik9_10M       0         10000000
 make_slice enwik9_100M      0        100000000   # == enwik8
-make_slice enwik9_mid10M    500000000 10000000
+make_slice enwik9_mid10M    500000000 10000000   # does NOT round-trip through slicetool (scripts/README.md)
+# Page-aligned mid slices: they start 29 lines before the first <page> after offset 5e8, so slicetool's
+# 29-line "intro" ends exactly at a <page> and pre/post round-trips. Use these instead of enwik9_mid10M.
+make_slice enwik9_mid10M_pa 500000168 10000000
+make_slice enwik9_mid1M_pa  500000168  1000000
 ln -sfn enwik9_100M "$SLICES/enwik8"
 
 # --- 4. verify known md5s ---------------------------------------------------

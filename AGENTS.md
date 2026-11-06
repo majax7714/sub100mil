@@ -75,7 +75,10 @@ This file is the single source of project rules for any agent (Claude, Codex, et
   - `enwik9_10M`: the main iteration benchmark
   - `enwik9_mid10M`: 10 MB from offset 5×10^8. **Caveat:** this is mostly bot-generated US census town
     articles, so it's not representative. It's a stress test only, and a strided replacement is planned.
-    It also **fails the slicetool round-trip** (see docs/EXPERIMENTS.md, Tooling debt); use `build/exp/E12/enwik9_mid10M_pa` for benches.
+    It also **fails the slicetool round-trip** (slicetool drops an interlanguage link in its partial first article), so
+    benches on it fail `cmp`. Kept only for comparing with old ledger rows.
+  - `enwik9_mid10M_pa` / `enwik9_mid1M_pa`: 10 MB / 1 MB from offset 500,000,168, i.e. the same census region but
+    starting 29 lines before a `<page>`, so slicetool round-trips. **Use these for mid-file benches.**
   - `enwik9_100M`: enwik8, the pre-full-run check
 - Full enwik9 runs are expensive. Run one only when a slice result justifies it, and log
   wall time and peak RSS (`/usr/bin/time -v`).

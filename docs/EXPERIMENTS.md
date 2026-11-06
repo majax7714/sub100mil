@@ -56,9 +56,6 @@ prose 63.8% (1.11 bits per byte), link targets 14.3%, refs 6.1%, external links 
 Bytes coded at ≥4 bits are 17.5% of bytes but 61% of bits. The transformer alone is only 0.9% worse than the full record.
 
 ## Tooling debt
-- **`enwik9_mid10M` doesn't round-trip through slicetool** (found by E12): slicetool assumes the first 29 lines are the siteinfo header and drops an
-  interlanguage link. Compression and cost dumps are still valid, but benches fail `cmp`. Use a slice that starts 29 lines before a `<page>`
-  (E12's `build/exp/E12/enwik9_mid10M_pa`, offset 500,000,168) until the mid slice is regenerated in `fetch_data.sh`.
 - **Warm control for CM-side slice gains** (from X1): cold slices flatter vocabulary mechanisms by about 3% on 10M. Check CM-side ideas against
   `scripts/analysis/x1_sim.cpp` with `X1_WARM=...` before trusting them.
 - **Before any full enwik9 run:** set `BENCH_TMP` to a disk path. PPMD's sparse `ppm.temp` (about 14 GB at full scale) otherwise lands in the

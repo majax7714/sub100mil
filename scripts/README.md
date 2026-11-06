@@ -22,7 +22,9 @@ Produces (all gitignored under `data/`):
 | `data/raw/enwik9.zip`, `data/raw/enwik9` | the corpus (10^9 bytes, md5 checked) |
 | `data/slices/enwik9_1M` | first 10^6 bytes (smoke tests) |
 | `data/slices/enwik9_10M` | first 10^7 bytes (main iteration benchmark) |
-| `data/slices/enwik9_mid10M` | 10^7 bytes from offset 5×10^8 (overfitting guard) |
+| `data/slices/enwik9_mid10M` | 10^7 bytes from offset 5×10^8 (overfitting guard). **Does not round-trip through slicetool** (it drops an interlanguage link in the partial first article); kept for old ledger rows, use `enwik9_mid10M_pa` |
+| `data/slices/enwik9_mid10M_pa` | 10^7 bytes from offset 500,000,168: 29 lines before the first `<page>` after 5×10^8, so slicetool's 29-line intro ends at a page and pre/post round-trips |
+| `data/slices/enwik9_mid1M_pa` | the first 10^6 bytes of `enwik9_mid10M_pa` (fast-lane census slice) |
 | `data/slices/enwik9_100M` | first 10^8 bytes, i.e. enwik8 (md5 checked); `enwik8` is a symlink to it |
 | `data/CHECKSUMS.sha256` | sha256 of everything above |
 
