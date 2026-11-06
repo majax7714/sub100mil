@@ -2,12 +2,17 @@
 """X2: the metadata-block specialist on the FULL RUN's (reordered) block: two calibration laws.
 
   pid  The block stores each page id as a delta to the previous record's (">-31"). With -e's reorder the deltas
-       jump. But the decoder knows each record's article number (the order file is decoded first), and page ids
-       grow with article number. So the id lies strictly between the ids of the nearest known article numbers
-       below and above (earlier records of the block); candidates are the ids in that open interval, Laplace-
-       weighted around the linear interpolation (adaptive scale per neighbour-gap bucket), window <= +-maxw.
+       jump. Page ids grow with the article number of the order file, so the id lies strictly between the ids of
+       the nearest known article numbers below and above (earlier records of the block); candidates are the ids
+       in that open interval, Laplace-weighted around the linear interpolation, window <= +-maxw.
+       NOT USABLE AS IS: archive9 does not carry the order file (selfextract_decomp unpacks only the dictionary,
+       the weights and the payload; sort() restores the order by page id). The page-id deltas ARE the channel that
+       transmits the permutation, so this law would need the 201,077-byte order file in archive9.
   ts   Revision ids above 18.1M are issued in time order: the time is interpolated between the nearest known
        revision ids below and above (earlier records), Laplace weights, adaptive scale.
+  rpid The redirects follow all articles, in id order, so a redirect's page id is most likely one of the next ids
+       after the previous record's that no earlier record used (all article ids are known by then): candidates are
+       the next 64 unused ids, weighted (1 + j)^-1.5. Decoder-valid (uses decoded records only).
   uid  The user id is the one last seen with this user name (a warm CM already does this; reported, not counted).
 
 Usage:
@@ -87,6 +92,7 @@ def walk(meta, maxw):
     cal_pid = Calib(2.0)   # article number -> page id
     cal_ts = Calib(8.0)    # revision id -> time
     uids = {}
+    used = set()
     prev_pid = 0
     for row in meta:
         rank, pid, rev, T, user, uid, art = row
@@ -96,6 +102,13 @@ def walk(meta, maxw):
             if q is not None:
                 p, b, gb, lo, hi = q
                 pr["pid"] = (laplace_cands(p, b, lo + 1, hi - 1, maxw), q)
+        if art < 0 and prev_pid > 0:
+            c, x = [], prev_pid + 1
+            while len(c) < 64:
+                if x not in used:
+                    c.append((x, (1.0 + len(c)) ** -1.5))
+                x += 1
+            pr["rpid"] = (c, None)
         if rev >= HI:
             q = cal_ts.predict(rev)
             if q is not None:
@@ -110,6 +123,7 @@ def walk(meta, maxw):
             cal_ts.update(rev, T, pr["ts"][1] if "ts" in pr else None)
         if user and not user.startswith("ip:"):
             uids[user] = uid
+        used.add(pid)
         prev_pid = pid
 
 
@@ -198,6 +212,7 @@ def slots(meta, args):
             continue  # the proxy's first delta is relative to 0, not to the previous page of the full block
         for f, cls, grp, cand_fn in (
                 ("pid", 5, 1, lambda v: b"%d\n" % (v - pr["prev_pid"])),
+                ("rpid", 5, 1, lambda v: b"%d\n" % (v - pr["prev_pid"])),
                 ("ts", 6, 3, lambda v: ts_str(v) + b"\n"),
                 ("uid", 7, 5, None)):
             if f not in pr or f not in args.fields:
@@ -239,7 +254,7 @@ def main():
     ap.add_argument("--cost")
     ap.add_argument("--dict")
     ap.add_argument("--out")
-    ap.add_argument("--fields", default="pid,ts,uid")
+    ap.add_argument("--fields", default="pid,ts,uid", help="pid,rpid,ts,uid")
     ap.add_argument("--maxw", type=int, default=2000)
     args = ap.parse_args()
     meta = load_meta(args.meta)
