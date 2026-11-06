@@ -405,14 +405,16 @@ closing tag; `x2_proxy.py`), so the standard slice pipeline takes them unchanged
   The redirect law reproduces at ranks 200K/230K (0.79 vs 0.80/0.77 bits per slot), not at 175K (0.08 vs 1.01).
 - **Cost:** +5 to +12 s per 1 MB proxy direction (contended timings; about 3,000 slots with up to 4,001 candidates each), 0 s
   on 1M; peak RSS +4 MB. On the full stream, ≤ 2 slots per page over 243K pages is the same order: well under 0.1 h.
-  Binary 637,304 B vs E12's 612,664 (+24.6 KB uncompressed, unpacked; mostly the extra template instantiations;
-  not optimized).
+  Binary 637,304 B vs E12's 612,664 (+24.6 KB uncompressed and unpacked; not size-optimized; the packed cost
+  for S still needs measuring).
 
 **Updated projection [ESTIMATE]**, from the real model's warm-seeded gains (`x2_meta_project.py` with the nine
 `csim_warm_*.csim` points): time law **121.3 KB** + redirect ids **5.6 KB** = **≈ 127 KB, range 85–135 KB** (the low end is
 /1.5 for a warmer record). That's unchanged from §5.4, now backed by the real model rather than the offline mixer.
 
-**Warm-record check (30K-record proxy):** queued in the main lane (`build/exp/X2/run_30k`, cost-logged record run on
-`proxy_30k.pre`, ranks 100K–130K), which was held by the C2/100M benches. When it lands:
+**Warm-record check (30K-record proxy): not run.** The main lane was held by the C2/100M benches for the whole
+session, so the queued job was stopped rather than left to take a slot unattended. To run it (about 45 min, main lane):
+`cd build/exp/X2/run_30k && ../../../../scripts/slot.sh env FX2_COSTLOG=$PWD/cost_proxy_30k.bin ../../../../build/exp/A1/cmix_costlog
+-c <english.dic> ../proxy_30k.pre proxy_30k.cmix --transformer <6m-q4-fp32.tfwc2>`, then
 `x2_csim build/exp/X2/run_30k/cost_proxy_30k.bin english.dic seed=build/exp/X2/seed_100000.tsv`, and compare the
 gain per timestamp in the first and last 3K records.
