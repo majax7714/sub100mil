@@ -12,6 +12,28 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-05: C1 combination is the new best (−0.211% on 10M); the E9 bug fix is neutral
+- **Type:** combination of model additions, plus a bug fix
+- **Did:** E9 patch (fxcm's real final output into the final mixer and `auxiliary_context_`) and the C1 build (E1 gate3 + E2 logit head + E3
+  agg16 BITLSTM + E9, with a merge patch; the BITLSTM reads E2's mixer column too). Patches in `patches/exp/E9-fxcm-final/` and
+  `patches/exp/C1-combo/` (commits 0707157, 4557627, 4b8f859, 5b61307). Comp and decomp both need `E2_LOGIT=1 BITL_LR_E6=3000 BITL_ACCUM=1`.
+- **Numbers:** 10M (record 1,264,682):
+  - E9 alone: 1,264,688, +6.
+  - **C1: 1,262,015, −2,667 (−0.211%)**, against a sum of parts of −2,859.
+  - C1 without E3: 1,262,339, −2,343.
+  - Peak RSS 5,811 MiB (+13).
+  - About 15 µs per coded byte, so **about 3.1 h on the reference machine (an estimate; about 40% of the 7.8 h headroom)**.
+  - The executable grows by 45 KB unpacked, about +15–20 KB of S after UPX (an estimate).
+  - Ledger rows added: 7.
+- **Learned:**
+  - The small wins mostly add up (93% of the sum).
+  - All the overlap is between E1 and E2, since both recalibrate how much the mixers trust the transformer. E1 keeps about −220 of its −410 on
+    top of E2.
+  - E3 is fully additive but the most expensive per byte saved. Drop it first if time gets tight.
+  - E9's dead column was never missed.
+- **Next:** confirm C1 on 100M (after the running 100M baseline and E2 runs). Try gating E2's mixer input by E1-style confidence. Then fold in
+  E10, depending on its 10M results.
+
 ## 2026-11-05: E11 in-article cache model is a NO-GO, but the closest miss so far (about 60 KB)
 - **Type:** model addition (non-transformer), tested offline only
 - **Did:** Simulated in-article caches over WRT tokens (unigram, recency-decayed unigram, bigram, trigram, rare-token unigram; reset at every

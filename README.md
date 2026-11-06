@@ -13,7 +13,8 @@ An attempt to compress **enwik9** (the Hutter Prize corpus) to a total size of
 
 | Slice | Bytes | bpb | Commit |
 |-------|-------|-----|--------|
-| **record + E2 logit head** (ours), enwik9_10M slice | **1,262,559** | 1.0100 | 1901d62 |
+| **record + C1 (E1 + E2 + E3 + E9)** (ours), enwik9_10M slice | **1,262,015** | 1.0096 | 0707157 |
+| record + E2 logit head (ours), enwik9_10M slice | 1,262,559 | 1.0100 | 1901d62 |
 | *reference:* record fx2-cmix-transformer (g++ build), enwik9_10M slice | 1,264,682 | 1.0117 | 44a7ea1 |
 | *reference:* cmix-neif (g++ build), first 10M of its preprocessed stream | 1,918,894 | 1.535 | 5146837 |
 
