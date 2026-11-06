@@ -118,7 +118,7 @@ By class on mid10M (offline sim; the causal one matches within a few bytes per c
 | `enwik9_1M` | 126,473 | 126,469 | −4 B (causal sim: −4) |
 | `enwik9_mid1M_pa` (10^6 B of enwik9 from offset 500,000,168, census articles) | 31,408 | **30,049** | **−1,359 B (−4.33%)** |
 | `enwik9_10M` | 1,264,682 | 1,264,559 | −123 B (causal sim: −127; one census article, mostly unit conversions) |
-| `enwik9_mid10M_pa` (10^7 B from offset 500,000,168) | queued | queued | — |
+| `enwik9_mid10M_pa` (10^7 B from offset 500,000,168) | 337,982 | queued | — |
 
 `data/slices/enwik9_mid10M` itself cannot be benched through `slice_cmd.sh` (§7), hence the page-aligned copies in
 `build/exp/E12/`. The mid10M simulation (−12.9 KB) and the mid1M_pa bench (−4.3%, the same share as mid10M's 3.8%
