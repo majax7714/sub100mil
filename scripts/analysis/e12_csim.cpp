@@ -51,6 +51,28 @@ int main(int argc, char** argv) {
   if (argc < 3) { fprintf(stderr, "usage: e12_csim COSTLOG english.dic [k=v ...]\n"); return 1; }
   for (int i = 3; i < argc; i++) { const char* e = strchr(argv[i], '='); if (e) P[std::string(argv[i], (size_t)(e - argv[i]))] = atof(e + 1); }
   const double lr = par("lr", 0.002), eps = par("eps", 1e-4);
+  if (par("stream", 0)) {  // argv[1] is a raw coded stream (e.g. build/exp/A1/full/full.stream): count slots, time it
+    FILE* sf = fopen(argv[1], "rb");
+    e12::ArithSpec sp(argv[2]);
+    if (!sf || !sp.ok) { fprintf(stderr, "open?\n"); return 1; }
+    std::vector<uint8_t> buf(1 << 20);
+    size_t got, total = 0;
+    long active_bits = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    while ((got = fread(buf.data(), 1, buf.size(), sf)) > 0) {
+      for (size_t i = 0; i < got; i++)
+        for (int b = 7; b >= 0; b--) {
+          int cls; double p1; int st, bp, c2;
+          if (sp.InSlot(&cls)) { active_bits++; sp.Predict(&p1, &c2, &st, &bp); }
+          sp.Bit((buf[i] >> b) & 1);
+        }
+      total += got;
+    }
+    double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("stream bytes %zu, %.1f s (%.3f us/byte), bits in slots %ld\n", total, s, s * 1e6 / total, active_bits);
+    for (int c = 0; c < e12::NCLS; c++) if (sp.slots_opened[c]) printf("%-11s %9ld\n", e12::kClassNames[c], sp.slots_opened[c]);
+    return 0;
+  }
   const int smlim = (int)par("smlim", 1023);
   std::ifstream f(argv[1], std::ios::binary);
   f.seekg(0, std::ios::end); size_t sz = f.tellg(); f.seekg(16);

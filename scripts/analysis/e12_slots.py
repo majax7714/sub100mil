@@ -482,9 +482,14 @@ def dbucket(D):
     return min(int(math.log2(D)), 24)
 
 
-def audit(slots, path):
+def audit(slots, path, counts_only=False):
     agg = defaultdict(lambda: [0, 0, 0.0, 0])  # n, hit, bits (spec alone, misses at 24 bits), chars
     for s in slots:
+        if counts_only:
+            a = agg[(CLASSES[s.cls], dbucket(s.D))]
+            a[0] += 1
+            a[3] += len(s.actual) if s.actual else 1
+            continue
         tot = 0.0
         hitw = 0.0
         for comp in s.comps:
@@ -514,6 +519,8 @@ def audit(slots, path):
         if c in bycls:
             n, h, bits, ch = bycls[c]
             print(f"{c:12s} {n:8d} {100 * h / n:7.2f} {bits / n:14.2f} {ch / n:10.2f}")
+    if counts_only:
+        print("(counts only: hit% and spec bits not computed)")
 
 
 # ---------------------------------------------------------------- write descriptors
@@ -543,12 +550,13 @@ def main():
     ap.add_argument("--dict")
     ap.add_argument("--out")
     ap.add_argument("--audit")
+    ap.add_argument("--counts-only", action="store_true", help="audit: slot counts only (fast; for full.pre)")
     args = ap.parse_args()
     text = open(args.pre, "rb").read()
     slots = find_slots(text)
     print(f"{len(slots):,} slots")
     if args.audit:
-        audit(slots, args.audit)
+        audit(slots, args.audit, args.counts_only)
     if args.cost:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import a1_analyze as a1  # noqa: E402

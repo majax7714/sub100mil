@@ -95,17 +95,27 @@ inline void add_norm(CandMap& dst, const CandMap& src, double w) {
 inline CandMap lattice(int kind, int64_t D, int64_t kmin, int64_t kmax, double scale, int dec, char term,
                        double lo = -1e18, double hi = 1e18) {
   CandMap m;
-  char buf[64];
+  if (kmax - kmin > 200000) return m;  // huge denominators: (almost) every display value is possible, abstain
+  // values are monotone in k, so equal strings come in runs: merge runs before touching the map
+  char buf[64], prev[64];
+  int pl = -1;
+  double cnt = 0;
   if (kmin < 0) kmin = 0;
+  std::vector<std::pair<std::string, double>> runs;
   for (int64_t k = kmin; k <= kmax; k++) {
     double v;
     if (kind == 1) v = scale * (double)k / (double)D;
     else { if (k >= D) break; v = scale * (double)k / (double)(D - k); }
-    if (v < lo - 1e-9 || v > hi + 1e-9) continue;
+    if (v < lo - 1e-9) continue;
+    if (v > hi + 1e-9) break;
     int l = snprintf(buf, sizeof buf, "%.*f", dec, v);
     buf[l] = term;
-    m[std::string(buf, l + 1)] += 1;
+    if (l + 1 == pl && !memcmp(buf, prev, pl)) { cnt += 1; continue; }
+    if (pl > 0) runs.push_back({std::string(prev, pl), cnt});
+    memcpy(prev, buf, l + 1); pl = l + 1; cnt = 1;
   }
+  if (pl > 0) runs.push_back({std::string(prev, pl), cnt});
+  for (auto& r : runs) m.emplace_hint(m.end(), r.first, 0.0)->second += r.second;
   return m;
 }
 inline bool range_list(CandMap& m, double lo, double hi, int dec, const std::string& term, bool commas,
@@ -382,12 +392,8 @@ class ArithSpec {
     if (!census_ && art_.size() > 20 && art_.compare(art_.size() - 8, 8, "[census]") == 0) census_ = true;
     if (active_) return;  // one slot at a time
     char last = art_.back();
-    if (last == '(') try_conv();
-    if (active_) return;
-    if (last != ' ' && last != '(' && last != '\n') return;
-    bool coord2 = last == ' ' && ends(art_, ", ") && art_.size() > 40 &&
-                  art_.find("t (", art_.size() - 30) != std::string::npos;
-    if (census_ || last == '(' || coord2) try_triggers();
+    if (last == ' ' || last == '(' || last == '\n') try_triggers();
+    if (!active_ && last == '(') try_conv();
   }
 
   bool tail_match(const std::regex& re, std::smatch& m, size_t win = 400) {
@@ -452,8 +458,11 @@ class ArithSpec {
   void try_triggers() {
     std::smatch m;
     for (auto& t : trig_) {
-      if (!census_ && t.id != T_COORD1 && t.id != T_COORD2) continue;
       if (!ends(art_, t.suffix.c_str())) continue;
+      if (!census_ && (t.id == T_HH_COPY || t.id == T_SEX || t.id == T_SEX18 || t.id == T_HISP || t.id == T_HHSIZE ||
+                       t.id == T_FAMSIZE || t.id == T_DENS_KM || t.id == T_DENS_MI || t.id == T_HDENS_KM ||
+                       t.id == T_HDENS_MI)) continue;
+      if (t.id == T_COORD2 && art_.find("t (", art_.size() > 30 ? art_.size() - 30 : 0) == std::string::npos) continue;
       if (!tail_match(t.re, m)) continue;
       fire(t.id, m);
       if (active_) return;
