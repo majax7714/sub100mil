@@ -3,7 +3,7 @@
 **Verdict: GO.** A causal specialist that derives census numbers from numbers earlier in the same article (lattices
 `k/P`, sums to 100, unit arithmetic, density ratios) and general unit conversions saves **12.9 KB on
 `enwik9_mid10M` (3.8% of the record's 337,937 B)** in simulation, and the real cmix integration reproduces it on a
-census slice: **31,408 → 30,049 B (−4.33%) on 1 MB, round-trip verified** (§4). Projected to full enwik9: **about 170 KB, range 140–190 KB [ESTIMATE]**, above the 100 KB bar,
+census slices: **337,982 → 325,041 B (−12,941, −3.83%) on 10 MB and 31,408 → 30,049 B (−4.33%) on 1 MB, round-trip verified** (§4). Projected to full enwik9: **about 170 KB, range 140–190 KB [ESTIMATE]**, above the 100 KB bar,
 for about 0.1–0.3 h of CPU and under 1 MB of RAM. It is the first non-transformer mechanism above the bar.
 
 Labels: **[M]** measured here; **[ESTIMATE]** derived by the argument next to it.
@@ -118,7 +118,7 @@ By class on mid10M (offline sim; the causal one matches within a few bytes per c
 | `enwik9_1M` | 126,473 | 126,469 | −4 B (causal sim: −4) |
 | `enwik9_mid1M_pa` (10^6 B of enwik9 from offset 500,000,168, census articles) | 31,408 | **30,049** | **−1,359 B (−4.33%)** |
 | `enwik9_10M` | 1,264,682 | 1,264,559 | −123 B (causal sim: −127; one census article, mostly unit conversions) |
-| `enwik9_mid10M_pa` (10^7 B from offset 500,000,168) | 337,982 | queued | — |
+| `enwik9_mid10M_pa` (10^7 B from offset 500,000,168) | 337,982 | **325,041** | **−12,941 B (−3.83%)** (causal sim on mid10M: −12,928) |
 
 `data/slices/enwik9_mid10M` itself cannot be benched through `slice_cmd.sh` (§7), hence the page-aligned copies in
 `build/exp/E12/`. The mid10M simulation (−12.9 KB) and the mid1M_pa bench (−4.3%, the same share as mid10M's 3.8%
