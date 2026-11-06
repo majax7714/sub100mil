@@ -47,9 +47,26 @@ scripts/slot.sh scripts/bench.sh --method fx2T+E12-arith --slice data/slices/enw
   --comp "E12_DICT=$D FX2_BIN=$B $P/slice_cmd.sh comp {in} {out}" --decomp "E12_DICT=$D FX2_BIN=$B $P/slice_cmd.sh decomp {in} {out}"
 ```
 
+## Full mode (`cmix -e enwik9` / `archive9`)
+
+- In -e mode runner.cpp codes preprocessor::Encode's 5-byte block header (type TEXT = 7, 4-byte length) before the
+  WRT flag byte; in slice mode (-c/-d with --transformer) that header is stored raw. The patch passes this as
+  `PredictorOptions::e12_coded_block_header = !g_raw_block_header`, and the model skips 6 leading bytes instead of 1.
+  enwik9 is one segment (< 2^31 bytes), so there is no second block header.
+- **Verified on the real -e stream:** `comp9 -e enwik9 --bytes-only --save-ppmd-bytes` (vocabulary indices, mapped
+  back to bytes with kEnwik9Vocab) gives the 586,459,020-byte reordered stream (starts `07 37 af 12 70 07`). The
+  model with the header skip opens exactly the same number of slots per class (and the same 51,870,944 in-slot
+  bits) as on the identity-order slicetool stream: reordering moves whole articles, and the model is per article.
+  Time 554 s over the stream on this box (0.94 µs per coded byte), the same as identity order.
+- The dictionary: -e and archive9 extract it to `./.dict` in the working directory before the predictor exists, so a
+  full run sets `E12_DICT=.dict` (both directions). A submission build would make that the default instead of an env
+  variable.
+- **Not tested end to end:** the -e pipeline is enwik9-only (hard-coded line counts and the 243,425-article order), so
+  there is no smaller full-mode test. A full test is one comp9 build with this patch (the record's `construct.sh`)
+  and one full compress plus decompress, about 30+ h per direction on this box, with `BENCH_TMP` on disk.
+
 ## Known limits
 
-- Slice mode only so far. A full enwik9 run (`-e`, reordered articles, several blocks) needs the decoder to skip
-  each block's WRT flag byte, not only the first one; check `art_` resets there before a full run.
 - Article text is kept in a `std::string` per article and parsed with `std::regex` only at trigger points (literal
   suffix prefilter first).
+- Mixer lr: `E12_LR` (default 0.002; 0.004 measured better, see the design doc).
