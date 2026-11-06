@@ -1,0 +1,55 @@
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index bf1b07b..4498aab 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -250,6 +250,13 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+               (int)options.e12_coded_block_header, lr && *lr ? lr : "0.002");
+     }
+   }
++  if (const char* d = getenv("X2_DICT")) {
++    if (*d && !options.ppmd_only && !options.transformer_only) {
++      x2_ = std::make_unique<x2::TimeLawMix>(d, options.e12_coded_block_header, 0.002);
++      if (!x2_->spec.ok) { fprintf(stderr, "X2: cannot read dictionary %s\n", d); exit(1); }
++      fprintf(stderr, "X2: metadata time law on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -567,6 +574,7 @@ float Predictor::Predict() {
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
+   if (e12_) p = e12_->Predict(p);
++  if (x2_) p = x2_->Predict(p);
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -709,6 +717,7 @@ void Predictor::Perceive(int bit) {
+     return;
+   }
+   if (e12_) e12_->Update(bit);
++  if (x2_) x2_->Update(bit);
+   {
+   PROF(CMO);
+   bracket_model_->Perceive(bit);
+diff --git a/src/predictor.h b/src/predictor.h
+index d7f3f4d..25b639b 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -17,6 +17,7 @@
+ #include "models/bracket.h"
+ #include "models/fxcmv1.h"
+ #include "models/e12_arith.h"
++#include "models/x2_timelaw.h"
+ #include "mixer/lstm.h"
+ #include "contexts/context-hash.h"
+ #include "contexts/bracket-context.h"
+@@ -185,6 +186,8 @@ class Predictor {
+   std::unique_ptr<fx2::opt::TransformerOpt> transformer_;
+   // E12 arithmetic-consistency specialist (final stage); on when E12_DICT names the WRT dictionary.
+   std::unique_ptr<e12::E12Mix> e12_;
++  // X2 metadata-block time law + redirect page-id law (final stage after E12); on when X2_DICT names english.dic.
++  std::unique_ptr<x2::TimeLawMix> x2_;
+   int byte_to_index_[256];
+   std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
+   std::vector<float> transformer_probs_; // the transformer's output row

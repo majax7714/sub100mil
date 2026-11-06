@@ -256,8 +256,15 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--fields", default="pid,ts,uid", help="pid,rpid,ts,uid")
     ap.add_argument("--maxw", type=int, default=2000)
+    ap.add_argument("--seed-out", help="with --seed-rank R: write rev, T, pid of every record with rank < R")
+    ap.add_argument("--seed-rank", type=int)
     args = ap.parse_args()
     meta = load_meta(args.meta)
+    if args.seed_out:
+        with open(args.seed_out, "w") as f:
+            for rank, pid, rev, T, user, uid, art in meta:
+                if rank < args.seed_rank:
+                    f.write(f"{rev}\t{T}\t{pid}\n")
     if args.report:
         report(meta, args.maxw)
     if args.out:
