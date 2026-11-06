@@ -36,8 +36,14 @@ Newest entries first. One entry per session or experiment. Format:
   - The page-id-from-article-order law (about 200 KB at stake) is *not* decoder-valid: `archive9` doesn't carry the order file, and those
     deltas are how the reorder's permutation reaches the decoder.
   - Interlanguage links hold about 835 KB but are already cheap (1.2–1.5 bits per byte).
-- **Next:** build it as `patches/exp/X2-timelaw/` stacked on E12-arith; real round-trip benches on the proxies vs the record and E12 alone; the
-  30K-record warm proxy; then fold into C2.
+- **Addendum (real build):** `patches/exp/X2-timelaw/` runs as a final stage after E12's; no E12 file changed (commits e2dc80f, e4c3bc0, 8667af6).
+  - Gains over E12 alone on 1 MB reordered-block proxies, all round-trip OK: ranks 5K −534 B (−1.33%), 100K −554 (−1.48%), 130K −1,046 (−4.14%),
+    200K −30; id-order control −248; enwik9_1M −4.
+  - **Every result equals the causal sim to within 1 B.** Warm-seeded, the real model gives 3.2–8.1 bits per timestamp, matching the offline
+    sims, so the projection stays **about 127 KB (85–135 KB, an estimate)**.
+  - Cost: +4 MB RSS; binary +24.6 KB unpacked, not yet size-optimized.
+  - Ledger rows added: 17 (marked `+dirty` because the ledger was uncommitted while they ran).
+- **Next:** fold into C2 (the E12 agent, after the C2 100M run); the 30K warm-record proxy is still pending.
 
 ## 2026-11-06: Batch 3 (off-plan darts): E12 arithmetic consistency is a GO; X1 cross-domain and A3 encoder-side selection are NO-GO
 - **Type:** E12 model addition (non-transformer specialist); X1 model addition (non-transformer, cross-domain synthesis, offline); A3 architectural
