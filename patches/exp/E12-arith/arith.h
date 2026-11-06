@@ -33,6 +33,7 @@
 #include <regex>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -92,30 +93,55 @@ inline void add_norm(CandMap& dst, const CandMap& src, double w) {
   for (auto& kv : src) dst[kv.first] += w * kv.second / t;
 }
 // values scale*k/D (kind 1) or scale*k/(D-k) (kind 2), k in [kmin, kmax], kept if in [lo, hi]
+// values scale*k/D (kind 1) or scale*k/(D-k) (kind 2), k in [kmin, kmax], kept if in [lo, hi]; each distinct
+// display string weighted by its number of k. Values are monotone in k, so equal strings come in runs of k: the
+// runs of the unfiltered lattice are cached (per article) and a [lo, hi] filter is a k range found by bisection.
+struct LatRun { std::string s; int64_t k0, k1; };
+struct LatKey {
+  int kind; int64_t D, kmin, kmax; double scale; int dec; char term;
+  bool operator<(const LatKey& o) const {
+    return std::tie(kind, D, kmin, kmax, scale, dec, term) < std::tie(o.kind, o.D, o.kmin, o.kmax, o.scale, o.dec, o.term);
+  }
+};
+inline double lat_v(int kind, int64_t D, double scale, int64_t k) {
+  return kind == 1 ? scale * (double)k / (double)D : scale * (double)k / (double)(D - k);
+}
+inline std::map<LatKey, std::vector<LatRun>>& lat_cache() { static std::map<LatKey, std::vector<LatRun>> c; return c; }
 inline CandMap lattice(int kind, int64_t D, int64_t kmin, int64_t kmax, double scale, int dec, char term,
                        double lo = -1e18, double hi = 1e18) {
   CandMap m;
   if (kmax - kmin > 200000) return m;  // huge denominators: (almost) every display value is possible, abstain
-  // values are monotone in k, so equal strings come in runs: merge runs before touching the map
-  char buf[64], prev[64];
-  int pl = -1;
-  double cnt = 0;
   if (kmin < 0) kmin = 0;
-  std::vector<std::pair<std::string, double>> runs;
-  for (int64_t k = kmin; k <= kmax; k++) {
-    double v;
-    if (kind == 1) v = scale * (double)k / (double)D;
-    else { if (k >= D) break; v = scale * (double)k / (double)(D - k); }
-    if (v < lo - 1e-9) continue;
-    if (v > hi + 1e-9) break;
-    int l = snprintf(buf, sizeof buf, "%.*f", dec, v);
-    buf[l] = term;
-    if (l + 1 == pl && !memcmp(buf, prev, pl)) { cnt += 1; continue; }
-    if (pl > 0) runs.push_back({std::string(prev, pl), cnt});
-    memcpy(prev, buf, l + 1); pl = l + 1; cnt = 1;
+  if (kind == 2 && kmax > D - 1) kmax = D - 1;
+  if (kmax < kmin) return m;
+  LatKey key{kind, D, kmin, kmax, scale, dec, term};
+  auto& cache = lat_cache();
+  auto it = cache.find(key);
+  if (it == cache.end()) {
+    std::vector<LatRun> runs;
+    char buf[64];
+    for (int64_t k = kmin; k <= kmax; k++) {
+      int l = snprintf(buf, sizeof buf, "%.*f", dec, lat_v(kind, D, scale, k));
+      buf[l] = term;
+      if (!runs.empty() && runs.back().s.size() == (size_t)l + 1 && !memcmp(runs.back().s.data(), buf, l + 1)) {
+        runs.back().k1 = k;
+        continue;
+      }
+      runs.push_back({std::string(buf, l + 1), k, k});
+    }
+    it = cache.emplace(key, std::move(runs)).first;
   }
-  if (pl > 0) runs.push_back({std::string(prev, pl), cnt});
-  for (auto& r : runs) m.emplace_hint(m.end(), r.first, 0.0)->second += r.second;
+  // k range with v in [lo - 1e-9, hi + 1e-9] (v is nondecreasing in k)
+  int64_t a = kmin, b = kmax + 1;  // first k with v >= lo - 1e-9
+  while (a < b) { int64_t mid = a + (b - a) / 2; if (lat_v(kind, D, scale, mid) < lo - 1e-9) a = mid + 1; else b = mid; }
+  int64_t kl = a;
+  a = kmin; b = kmax + 1;  // first k with v > hi + 1e-9
+  while (a < b) { int64_t mid = a + (b - a) / 2; if (lat_v(kind, D, scale, mid) > hi + 1e-9) b = mid; else a = mid + 1; }
+  int64_t kh = a - 1;
+  for (const LatRun& r : it->second) {
+    int64_t x0 = std::max(r.k0, kl), x1 = std::min(r.k1, kh);
+    if (x0 <= x1) m[r.s] += (double)(x1 - x0 + 1);
+  }
   return m;
 }
 inline bool range_list(CandMap& m, double lo, double hi, int dec, const std::string& term, bool commas,
@@ -387,7 +413,7 @@ class ArithSpec {
     if (art_.size() >= 6) {
       size_t s = art_.size() >= from + 6 ? from : art_.size() - 6;
       size_t k = art_.find("<page>", s > 5 ? s - 5 : 0);
-      if (k != std::string::npos) { art_.erase(0, k); census_ = false; }
+      if (k != std::string::npos) { art_.erase(0, k); census_ = false; lat_cache().clear(); }
     }
     if (!census_ && art_.size() > 20 && art_.compare(art_.size() - 8, 8, "[census]") == 0) census_ = true;
     if (active_) return;  // one slot at a time
