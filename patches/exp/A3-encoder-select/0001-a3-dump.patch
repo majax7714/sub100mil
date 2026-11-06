@@ -1,0 +1,39 @@
+diff --git a/cpp_infer/src/opt/model_opt.cpp b/cpp_infer/src/opt/model_opt.cpp
+index ba8c2ab..062231d 100644
+--- a/cpp_infer/src/opt/model_opt.cpp
++++ b/cpp_infer/src/opt/model_opt.cpp
+@@ -14,6 +14,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <vector>
+ 
+@@ -291,7 +292,13 @@ struct TransformerOptImpl {
+     if (e2.fwk > FWMAX) e2.fwk = FWMAX;
+     fw_dW.assign(size_t(e2.fwk) * DMLP * D, 0.0f);
+     if (e2.logit) lg_A.assign(size_t(D + 1) * 208, 0.0f);
++    // [sub100mil A3] dump per-token head inputs (logit head, fwk == 0 only):
++    // record = int32 target, float xn[192], float raw_logits[205]
++    if (const char* dp = getenv("A3_DUMP"))
++      if (*dp && e2.logit && e2.fwk == 0) a3_dump = std::fopen(dp, "wb");
+   }
++  std::FILE* a3_dump = nullptr;
++  ~TransformerOptImpl() { if (a3_dump) std::fclose(a3_dump); }
+ 
+   // FW forward for block b (b = 0 runs first and clears fw_dx): h = q768 * s
+   // over the nonzero relu^2 codes, dx += dW_b[:, i] h_i (ex-girlfriend
+@@ -361,6 +368,12 @@ struct TransformerOptImpl {
+   }
+ 
+   void e2_update(uint8_t y) {
++    if (a3_dump) {  // [sub100mil A3]
++      const int32_t yy = y;
++      std::fwrite(&yy, 4, 1, a3_dump);
++      std::fwrite(fw_xn, 4, D, a3_dump);
++      std::fwrite(raw_logits, 4, V, a3_dump);
++    }
+     alignas(64) float dl[208];
+     for (int o = 0; o < V; o++) {
+       const float d = fw_probs208[o] - (o == int(y) ? 1.0f : 0.0f);
