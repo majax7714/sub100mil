@@ -30,12 +30,14 @@ Newest entries first. One entry per session or experiment. Format:
   - **E12:** record cost on derivable slots on mid10M is 58.3 KB (17% of the archive). Offline sim mid10M −12,928 B (−3.83%), 10M −127 B.
     **Real build, census 1M slice (`enwik9_mid1M_pa`): 31,408 → 30,049 B (−4.33%)**, round-trip OK; enwik9_1M 126,473 → 126,469.
     **Full enwik9 ESTIMATE about 170 KB (140–190 KB)** from 1.22M slots counted on the full WRT stream. About 0.95 µs per byte (about 0.2 h,
-    an estimate), under 1 MB RAM, about +3 KB of S. The mid10M_pa and 10M main-lane benches are still running.
+    an estimate), under 1 MB RAM, about +3 KB of S.
+    **Census 10M slice (`enwik9_mid10M_pa`): record 337,982 → E12 325,041 B (−12,941, −3.83%)**, round-trip OK; causal sim said −12,928.
+    **10M: 1,264,682 → 1,264,559 (−123)**, round-trip OK; sim said −127. The sim tracks the real build to within 0.3%.
   - **X1:** couplings +396 to +423 B (0.03%) on 10M over a warm n-gram control; online on a partial 100M cost log +277 B at 24.7M coded bytes.
     Projected about 35 KB (10–60 KB). Coarse state ≤ 28 B on 10M.
   - **A3:** 10M oracle bound −149 B of head loss vs the best fixed LR (block 16K); greedy fork-and-commit loses (+410 B at 16K); lookahead nets
     −42 B at 30× encoder head cost. By-product: **C1 with E2's LR halved (`E2_A0=0.25 E2_AF=0.05`): 10M 1,261,970 (−45 B vs C1)**, round-trip OK.
-  - Ledger rows added: 5 so far (E12 1M ×3 incl. the record on mid1M_pa, A3 1).
+  - Ledger rows added: 7 (E12: 1M, mid1M_pa ×2, 10M, mid10M_pa ×2; A3: 1).
 - **Learned:**
   - The biggest non-transformer gap we've found is **arithmetic**: neither the CM nor the transformer can divide, and Rambot census articles are
     full of exact ratios. Gains concentrate on a well-defined 4% of enwik9.
@@ -46,7 +48,7 @@ Newest entries first. One entry per session or experiment. Format:
     LR optima).
   - `data/slices/enwik9_mid10M` can't round-trip through slicetool, which assumes the first 29 lines are the siteinfo header. E12 used slices
     starting 29 lines before a `<page>` (offset 500,000,168) in `build/exp/E12/`.
-- **Next:** E12: finish the mid10M_pa and 10M benches; add block-header handling for full-mode runs; try mixer lr 0.004 (−13.4 KB offline vs
+- **Next:** E12: add block-header handling for full-mode runs; try mixer lr 0.004 (−13.4 KB offline vs
   −12.9 KB); then a 100M check and a fold into C1. Regenerate the mid slice so it round-trips. X1's leftover idea: feed a coupling signal into
   E2's head instead of as a byte expert.
 
