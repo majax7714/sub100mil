@@ -120,6 +120,15 @@ By class on mid10M (offline sim; the causal one matches within a few bytes per c
 | `enwik9_10M` | 1,264,682 | 1,264,559 | −123 B (causal sim: −127; one census article, mostly unit conversions) |
 | `enwik9_mid10M_pa` (10^7 B from offset 500,000,168) | 337,982 | **325,041** | **−12,941 B (−3.83%)** (causal sim on mid10M: −12,928) |
 
+**Mixer lr 0.004** (`E12_LR=0.004`): `enwik9_mid1M_pa` 29,920 B (−129 more than lr 0.002, −4.74% vs the record),
+`enwik9_mid10M_pa` **324,627 B (−414 more, −13,355 / −3.95% vs the record)**, both round-trip OK. The offline sim
+predicted −429 more on mid10M. lr 0.004 is the default in the C2/C3 combos.
+
+**Full mode:** the -e/archive9 stream codes a 5-byte block header before the WRT flag; the model now skips it
+(`PredictorOptions::e12_coded_block_header`). On the real reordered -e stream of full enwik9 (586,459,020 bytes,
+from `comp9 -e --bytes-only --save-ppmd-bytes`) it opens exactly the same slots per class as on the identity-order
+stream. See `patches/exp/E12-arith/README.md`.
+
 `data/slices/enwik9_mid10M` itself cannot be benched through `slice_cmd.sh` (§7), hence the page-aligned copies in
 `build/exp/E12/`. The mid10M simulation (−12.9 KB) and the mid1M_pa bench (−4.3%, the same share as mid10M's 3.8%
 with a colder CM) agree. Timing on the 1M census slice: comp 214.6 s vs 201.9 s (+6%, contended box, and the PGO
