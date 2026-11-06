@@ -1,0 +1,36 @@
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 49f03a8..e01c633 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -242,6 +242,15 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     sigmoid_(100001), vocab_(vocab), ppmd_only_(options.ppmd_only),
+     transformer_only_(options.transformer_only),
+     num_input_bytes_(options.num_input_bytes) {
++  if (const char* d = getenv("E12_DICT")) {
++    if (*d && !options.ppmd_only && !options.transformer_only) {
++      const char* lr = getenv("E12_LR");
++      e12_ = std::make_unique<e12::E12Mix>(d, options.e12_coded_block_header, lr && *lr ? atof(lr) : 0.002);
++      if (!e12_->spec.ok) { fprintf(stderr, "E12: cannot read dictionary %s\n", d); exit(1); }
++      fprintf(stderr, "E12: arithmetic specialist on (%s, coded block header %d, lr %s)\n", d,
++              (int)options.e12_coded_block_header, lr && *lr ? lr : "0.002");
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -668,6 +677,7 @@ float Predictor::Predict() {
+     p = (p * (4 - E1_APM_W) + pa * E1_APM_W) * 0.25f;
+   }
+ #endif
++  if (e12_) p = e12_->Predict(p);  // [E12] final stage after SSE (and E1's APM)
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -889,6 +899,7 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  if (e12_) e12_->Update(bit);  // [E12]
+   {
+   PROF(CMO);
+   bracket_model_->Perceive(bit);
