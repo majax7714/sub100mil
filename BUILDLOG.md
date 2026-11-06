@@ -12,6 +12,44 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-06: Batch 3 (off-plan darts): E12 arithmetic consistency is a GO; X1 cross-domain and A3 encoder-side selection are NO-GO
+- **Type:** E12 model addition (non-transformer specialist); X1 model addition (non-transformer, cross-domain synthesis, offline); A3 architectural
+  (asymmetric compute). The batch was deliberately off the transformer path: two non-transformer darts plus one new way of spending compute.
+- **Did:**
+  - **E12:** numbers that are functions of earlier numbers. The specialist is a final stage after SSE, causal, with its own WRT decoder. It covers
+    census percentages k/P and k/H (a lattice of possible display values), last items summing to 100, housing density from population density,
+    km²↔mi² and land/water area arithmetic, sex ratio, and unit conversions anywhere. Patches in `patches/exp/E12-arith/`, design in
+    docs/design/E12-arith-consistency.md (commits d8c83bc, 93617a8, a1f5288, 9a947ea, 8934a27, 9870d53).
+  - **X1:** surveyed 25 mechanisms from biology, physics and chemistry (docs/design/X1-cross-domain.md). Tested the top two offline: Potts/DCA
+    couplings between distinct tokens of an article (from protein coevolution), and coarse-grained state as a final-stage context (from
+    renormalization). Commit 8a3a0a2; attic `attic/2026-11-06-X1-cross-domain/`.
+  - **A3:** the encoder forks the E2 head's state per block, tries K learning rates, commits the best and sends the choice; the decoder replays only
+    the winner. Built a head-input dump and an exact offline replay of the head. Commits 1b4078b, 73f7026, 0f73794; attic
+    `attic/2026-11-06-A3-encoder-select/`.
+- **Numbers:**
+  - **E12:** record cost on derivable slots on mid10M is 58.3 KB (17% of the archive). Offline sim mid10M −12,928 B (−3.83%), 10M −127 B.
+    **Real build, census 1M slice (`enwik9_mid1M_pa`): 31,408 → 30,049 B (−4.33%)**, round-trip OK; enwik9_1M 126,473 → 126,469.
+    **Full enwik9 ESTIMATE about 170 KB (140–190 KB)** from 1.22M slots counted on the full WRT stream. About 0.95 µs per byte (about 0.2 h,
+    an estimate), under 1 MB RAM, about +3 KB of S. The mid10M_pa and 10M main-lane benches are still running.
+  - **X1:** couplings +396 to +423 B (0.03%) on 10M over a warm n-gram control; online on a partial 100M cost log +277 B at 24.7M coded bytes.
+    Projected about 35 KB (10–60 KB). Coarse state ≤ 28 B on 10M.
+  - **A3:** 10M oracle bound −149 B of head loss vs the best fixed LR (block 16K); greedy fork-and-commit loses (+410 B at 16K); lookahead nets
+    −42 B at 30× encoder head cost. By-product: **C1 with E2's LR halved (`E2_A0=0.25 E2_AF=0.05`): 10M 1,261,970 (−45 B vs C1)**, round-trip OK.
+  - Ledger rows added: 5 so far (E12 1M ×3 incl. the record on mid1M_pa, A3 1).
+- **Learned:**
+  - The biggest non-transformer gap we've found is **arithmetic**: neither the CM nor the transformer can divide, and Rambot census articles are
+    full of exact ratios. Gains concentrate on a well-defined 4% of enwik9.
+  - Slices flatter CM-side vocabulary mechanisms: a token n-gram model pre-fed with 30K other enwik9 articles gains 3.2% on the cold 10M slice.
+    Use X1's warm control (`x1_sim ... X1_WARM=...`) before trusting a CM-side slice gain.
+  - Head-loss proxies overstate marginal changes to the E2 head about 5× (−427 B head loss became −45 B coded).
+  - Encoder-side selection needs a component with a sharp, non-stationary optimum and real time slack; we have neither (7.8 h of headroom, flat
+    LR optima).
+  - `data/slices/enwik9_mid10M` can't round-trip through slicetool, which assumes the first 29 lines are the siteinfo header. E12 used slices
+    starting 29 lines before a `<page>` (offset 500,000,168) in `build/exp/E12/`.
+- **Next:** E12: finish the mid10M_pa and 10M benches; add block-header handling for full-mode runs; try mixer lr 0.004 (−13.4 KB offline vs
+  −12.9 KB); then a 100M check and a fold into C1. Regenerate the mid slice so it round-trips. X1's leftover idea: feed a coupling signal into
+  E2's head instead of as a byte expert.
+
 ## 2026-11-06: E2 holds on 100M (−0.150%); first 100M number for the record
 - **Type:** confirmation run (model addition E2)
 - **Did:** Rebuilt both binaries from committed patches (the baseline was md5-identical to `build/refs`), checked that slice mode works at 100M,

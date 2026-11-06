@@ -14,7 +14,9 @@ An attempt to compress **enwik9** (the Hutter Prize corpus) to a total size of
 | Slice | Bytes | bpb | Commit |
 |-------|-------|-----|--------|
 | record + E10 dynamic evaluation bk12q4d (ours), enwik9_10M slice; **over the time budget** (about 5.7 h, an estimate) | 1,261,985 | 1.0096 | 3caaaba |
-| **record + C1 (E1 + E2 + E3 + E9)** (ours), enwik9_10M slice; best that fits the budget | **1,262,015** | 1.0096 | 0707157 |
+| **record + C1 (E1 + E2 + E3 + E9) with E2 LR ×0.5** (ours), enwik9_10M slice; best that fits the budget | **1,261,970** | 1.0096 | 0f73794 |
+| record + C1 (E1 + E2 + E3 + E9) (ours), enwik9_10M slice | 1,262,015 | 1.0096 | 0707157 |
+| record + E12 arithmetic specialist (ours), census 1M slice `enwik9_mid1M_pa` (record 31,408 → 30,049, −4.33%) | 30,049 | 0.2404 | 8934a27 |
 | record + E2 logit head (ours), enwik9_10M slice | 1,262,559 | 1.0100 | 1901d62 |
 | record + E2 logit head (ours), enwik9_100M slice | 11,988,349 | 0.9591 | 8fce6b5 |
 | *reference:* record fx2-cmix-transformer (g++ build), enwik9_100M slice | 12,006,323 | 0.9605 | 65798d3 |
