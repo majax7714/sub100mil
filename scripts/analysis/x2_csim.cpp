@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     if (sf) fclose(sf);
     fprintf(stderr, "seeded %ld records\n", k);
   }
-  double rec = 0, after_e12 = 0, full = 0, in_x2_rec = 0, in_x2_full = 0;
+  double rec = 0, after_e12 = 0, full = 0, in_x2_rec = 0, in_x2_full = 0, cr[2] = {0, 0}, cf[2] = {0, 0};
   for (size_t i = 0; i < n; i++) {
     for (int b = 0; b < 8; b++) {
       int y = (R[i].byte >> (7 - b)) & 1;
@@ -63,7 +63,10 @@ int main(int argc, char** argv) {
       rec += -std::log2(y ? pr : 1 - pr);
       after_e12 += -std::log2(y ? pe : 1 - pe);
       full += -std::log2(y ? pf : 1 - pf);
-      if (in) { in_x2_rec += -std::log2(y ? pe : 1 - pe); in_x2_full += -std::log2(y ? pf : 1 - pf); }
+      if (in) {
+        in_x2_rec += -std::log2(y ? pe : 1 - pe); in_x2_full += -std::log2(y ? pf : 1 - pf);
+        cr[cls] += -std::log2(y ? pe : 1 - pe); cf[cls] += -std::log2(y ? pf : 1 - pf);
+      }
       if (e12m) e12m->Update(y);
       if (x2m) x2m->Update(y);
     }
@@ -72,5 +75,10 @@ int main(int argc, char** argv) {
          n, rec / 8, after_e12 / 8, (after_e12 - rec) / 8, full / 8, (full - after_e12) / 8, (full - rec) / 8);
   if (x2m) printf("X2 slots: time %ld, rpid %ld; bits in X2 slots %.0f -> %.0f B\n", x2m->spec.slots_opened[x2::TIME],
                   x2m->spec.slots_opened[x2::RPID], in_x2_rec / 8, in_x2_full / 8);
+  if (x2m) for (int c = 0; c < 2; c++) {
+    long n = x2m->spec.slots_opened[c];
+    printf("class %s: slots %ld, %.0f -> %.0f B, gain %.2f bits/slot\n", c == 0 ? "time" : "rpid", n, cr[c] / 8, cf[c] / 8,
+           n ? (cr[c] - cf[c]) / n : 0.0);
+  }
   return 0;
 }

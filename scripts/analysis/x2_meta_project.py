@@ -5,7 +5,7 @@ Usage:
   python3 -P -E scripts/analysis/x2_meta_project.py --meta build/exp/X2/meta_pages.tsv \
       --point 1400:SIM.txt --point 101400:SIM.txt ...   [--deflate 1.3]
 
-Each --point is the middle rank of a proxy (a cost-logged record run on reordered ranks, see x2_proxy.py) and the
+Each --point is the middle rank (a .csim file = x2_csim.cpp output of the real model, seeded warm) of a proxy (a cost-logged record run on reordered ranks, see x2_proxy.py) and the
 x2_sim output on it. Realized gain per slot (baseline - full, bits) is read per class (pid|revid = page-id delta,
 ts = timestamp), interpolated linearly in rank between points (held constant beyond the ends), and summed over the
 slots the specialist opens in the full block (the same causal walk as x2_meta2.py). uid is not counted: a warm CM
@@ -23,6 +23,12 @@ import x2_meta2 as m2  # noqa: E402
 
 def read_sim(path):
     g = {}
+    if path.endswith(".csim"):  # x2_csim.cpp output (the real model): "class time: slots N, a -> b B, gain G bits/slot"
+        for line in open(path):
+            mm = re.match(r"class (time|rpid): slots (\d+), .* gain (-?[0-9.]+) bits/slot", line)
+            if mm and int(mm.group(2)) > 0:
+                g["ts" if mm.group(1) == "time" else "pid"] = (float(mm.group(3)), int(mm.group(2)))
+        return g
     for line in open(path):
         mm = re.match(r"(pid\|revid|ts)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+-]\d+)", line)
         if mm:

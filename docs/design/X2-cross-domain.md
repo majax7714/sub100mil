@@ -370,11 +370,49 @@ the projection.
 
 ## 8. What next
 
-1. Build the time law (+ redirect ids) into `patches/exp/E12-arith` as two more classes, bench the 1 MB proxies and the
-   100M slice (round-trip + ledger), then include it in E12's full-mode run.
+1. ~~Build the time law~~ done (§9, `patches/exp/X2-timelaw`). Fold it into C2 and include it in E12's full-mode run.
 2. Warm-up check of the projection's low end: the 30K-record proxy (`build/exp/X2/proxy_30k.pre`, ranks 100K–130K,
    about 5M coded bytes, main lane, about 45 min) was built but not run, since the main lane was busy. Compare the
    gain per slot in its first and last 3K records.
 3. The permutation channel (§7): a same-page-set comparison of the metadata block in id order vs reordered order, then
    decide between modelling the deltas and shipping the order file.
 
+## 9. Real build: `patches/exp/X2-timelaw` (round trips) [M]
+
+The time law and the redirect page-id law are built as a sibling final stage after E12's
+(`patches/exp/X2-timelaw/`: `x2_timelaw.h`, one predictor patch on top of E12-arith, `build.sh`; README there).
+`X2_DICT` turns it on, `E12_DICT` E12, and with neither set the binary is the record. All rows go through
+`scripts/slot.sh --fast scripts/bench.sh` with `slice_cmd.sh` (`slicetool pre` → cmix → `slicetool post`), with `cmp` against
+the original input file. The proxies are ordinary enwik9-format XML (enwik9's 29-line intro, whole `<page>`s, the
+closing tag; `x2_proxy.py`), so the standard slice pipeline takes them unchanged. Every row round-trips.
+
+| input | record | E12 alone | E12 + X2 | **X2 vs E12** | causal sim (`x2_csim`, same header, cold) |
+|---|---:|---:|---:|---:|---:|
+| `enwik9_1M` | 126,473 (ledger) | 126,469 | 126,465 | **−4 B** | −4 B |
+| reordered ranks 5,000–7,800 | 40,257 | 40,257 | 39,723 | **−534 B (−1.33%)** | −534 B |
+| reordered ranks 100,000–102,800 | 37,358 | 37,358 | 36,804 | **−554 B (−1.48%)** | −554 B |
+| reordered ranks 130,000–132,800 | 25,268 | 25,268 | 24,222 | **−1,046 B (−4.14%)** | −1,045 B |
+| reordered ranks 200,000–202,800 (redirects) | 29,797 | 29,797 | 29,767 | **−30 B** | −30 B |
+| identity-order control, pages 120,000–122,850 | 36,343 | 36,343 | 36,095 | **−248 B (−0.68%)** | −248 B |
+
+- **Real = sim to the byte.** The causal sim runs the same header on the record's cost dumps, and agrees within 1 B on
+  every file. E12 does nothing on these proxies (no census text), so the X2 column is X2's own gain.
+- **Why the benches are smaller than §5.4:** a 1 MB proxy holds only its own ~2,800 records, spread over the whole
+  revision-id range, so the calibration curve is sparse: 0.6–3.3 bits per timestamp. In a full run the decoder knows
+  every earlier record of the block. `x2_csim seed=…` pre-loads exactly those (the full block's records before the
+  proxy's first rank), and the same header then gives **3.18, 6.14, 6.68, 6.91, 7.12, 7.11, 7.71, 7.58, 8.11 bits per
+  timestamp** at the nine proxy positions. The offline sim gave 3.23, 5.94, 6.59, 6.74, 7.26, 6.85, 7.55, 7.58, 8.13.
+  The redirect law reproduces at ranks 200K/230K (0.79 vs 0.80/0.77 bits per slot), not at 175K (0.08 vs 1.01).
+- **Cost:** +5 to +12 s per 1 MB proxy direction (contended timings; about 3,000 slots with up to 4,001 candidates each), 0 s
+  on 1M; peak RSS +4 MB. On the full stream, ≤ 2 slots per page over 243K pages is the same order: well under 0.1 h.
+  Binary 637,304 B vs E12's 612,664 (+24.6 KB uncompressed, unpacked; mostly the extra template instantiations;
+  not optimized).
+
+**Updated projection [ESTIMATE]**, from the real model's warm-seeded gains (`x2_meta_project.py` with the nine
+`csim_warm_*.csim` points): time law **121.3 KB** + redirect ids **5.6 KB** = **≈ 127 KB, range 85–135 KB** (the low end is
+/1.5 for a warmer record). That's unchanged from §5.4, now backed by the real model rather than the offline mixer.
+
+**Warm-record check (30K-record proxy):** queued in the main lane (`build/exp/X2/run_30k`, cost-logged record run on
+`proxy_30k.pre`, ranks 100K–130K), which was held by the C2/100M benches. When it lands:
+`x2_csim build/exp/X2/run_30k/cost_proxy_30k.bin english.dic seed=build/exp/X2/seed_100000.tsv`, and compare the
+gain per timestamp in the first and last 3K records.
