@@ -12,6 +12,38 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-06: E10 dynamic evaluation works, but only with decay, and its best setting is over the time budget
+- **Type:** model addition (transformer-side, online learning of internal parameters)
+- **Did:**
+  - Step 0: confirmed that the record adapts nothing on the transformer side online. The weights are frozen int4, the "pretraining" is only
+    for the CM models, and there are no biases and no learnable final norm.
+  - Built online SGD (one step per token on the head's cross-entropy) on per-channel gains of all 24 branch outputs and per-neuron gains on the
+    MLP relu² activations, i.e. dynamic evaluation of the quantization scales.
+  - The gradient is truncated: residual paths exact, attention Jacobians dropped, MLP backward exact in the top `E10_MLPBK` layers using int16
+    madd on the forward weight arenas.
+  - Patches in `patches/exp/E10-dyneval/` (commits dcc7e6d, dfbae0f, f61bee1, 915a141, 1d3448b, 3caaaba). Comp and decomp need the same `E10_*`
+    env vars.
+- **Numbers:** 10M (record 1,264,682):
+  - **bk12q4d (decay 1e-5): 1,261,985, −2,697 (−0.213%)**.
+  - bk12q4 without decay: +66.
+  - bk6q4 without decay: +1,050.
+  - 1M: bk12h −452, bk12q4d −434, bk12q4d+E2 −537.
+  - Cost on the reference machine (estimates): bk12q4d about 35 µs per token, so **about 5.7 h per direction**; bk6q4d about 3.3 h; bk12q4d+E2 about 7 h.
+  - About 0.25 MB RAM, RSS unchanged, about +6 KB of S.
+- **Learned:**
+  - Without decay the parameters drift, and the gain fades from −0.40% at 1M tokens to −0.165% at 5.7M on the transformer-only proxy. Decay
+    toward the frozen weights holds it at −0.375%.
+  - Gradient quality through depth is the biggest lever: the exact MLP backward gives 2.6× the residual-only gain, and all 12 layers beat the
+    top 2 by about 4×.
+  - Biases and low-rank residual branches diverge. Adam lost to SGD.
+  - It overlaps strongly with E2 (E2 adds −0.07% on the adapted transformer vs −0.30% on the frozen one), so it's more a substitute for E2
+    than an add-on. At full setting it costs far more time per byte saved than E2.
+- **Next:**
+  - On 10M: bk6q4d (fits the budget) and bk12q4d+E2.
+  - Tune decay on 100M with `proxy.sh`.
+  - Cut the per-neuron backward cost (int4 transposed W_up axpy, or a backward every 2nd token).
+  - A cheap attention Jacobian.
+
 ## 2026-11-05: C1 combination is the new best (−0.211% on 10M); the E9 bug fix is neutral
 - **Type:** combination of model additions, plus a bug fix
 - **Did:** E9 patch (fxcm's real final output into the final mixer and `auxiliary_context_`) and the C1 build (E1 gate3 + E2 logit head + E3
