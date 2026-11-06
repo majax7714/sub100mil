@@ -12,6 +12,24 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-06: E2 holds on 100M (−0.150%); first 100M number for the record
+- **Type:** confirmation run (model addition E2)
+- **Did:** Rebuilt both binaries from committed patches (the baseline was md5-identical to `build/refs`), checked that slice mode works at 100M,
+  then ran the record and the E2 logit head on enwik9_100M (enwik8) one after the other through the main lane. Ledger commits 65798d3 and
+  8fce6b5; E2 README updated.
+- **Numbers:**
+  - **record 100M: 12,006,323 B (0.9605 bpb)**, peak RSS 6,558 MiB.
+  - **E2: 11,988,349 B, −17,974 (−0.150%)**.
+  - Both round-trips OK.
+  - Wall times are heavily contended (record compress took 21,482 s, E2 11,687 s), so they carry no speed information. E2's cost is still
+    best taken from perf: about 5 µs per token, about 1 h at full scale (an estimate).
+  - Ledger rows added: 2.
+- **Learned:**
+  - E2's relative gain declines slowly with length: −0.17% (1M), −0.168% (10M), −0.150% (100M), as the warming CM absorbs more of what the head
+    corrects. Expect less than about −145 KB on full enwik9 (an extrapolation).
+  - PPMD's temp file lives on the `/tmp` tmpfs. Point `BENCH_TMP` at disk before any full run (see EXPERIMENTS tooling debt).
+- **Next:** confirm C1 (and later C2 with E10) on 100M; that's the number to project to full scale.
+
 ## 2026-11-06: E10 dynamic evaluation works, but only with decay, and its best setting is over the time budget
 - **Type:** model addition (transformer-side, online learning of internal parameters)
 - **Did:**

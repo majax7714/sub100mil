@@ -53,6 +53,8 @@ prose 63.8% (1.11 bits per byte), link targets 14.3%, refs 6.1%, external links 
 Bytes coded at ≥4 bits are 17.5% of bytes but 61% of bits. The transformer alone is only 0.9% worse than the full record.
 
 ## Tooling debt
+- **Before any full enwik9 run:** set `BENCH_TMP` to a disk path. PPMD's sparse `ppm.temp` (about 14 GB at full scale) otherwise lands in the
+  RAM-backed `/tmp` tmpfs. At 100M it held fine; peak RSS was 6,558 MiB, up from 5,797 at 10M, mostly PPMD growth.
 - ~~slot.sh gives no priority to short runs~~ (fixed 2026-11-05: `--fast` lane for ≤1M runs; main lane now 2 slots).
 - Agents' `until ! pgrep -f` wait loops match themselves and never exit (see scripts/README.md, "Waiting on a run").
 - ~~`bench.sh` marked runs `+dirty` for uncommitted ledger rows~~ (fixed 2026-11-05).

@@ -120,7 +120,7 @@ modest.
 - **FW1 gains slightly more on 10M (−2,165 B) at about 2.5× the time** (≈2.6 h). FW4 is the best on 1M (−297) but
   costs about 9.7 h and doesn't fit.
 - **The online learners did not gain more over a longer input.** FW1 fell from −0.21% (1M) to −0.17% (10M); the
-  logit head stayed at −0.17%. That differs from the proxy, where the head's own loss gain grew from 1M to 10M.
+  logit head went −0.17% (1M) → −0.168% (10M) → −0.150% (100M), a slow decline. That differs from the proxy, where the head's own loss gain grew from 1M to 10M.
   As the CM warms up, it captures more of what the head corrects.
 - **Full-enwik9 extrapolation (ESTIMATE, speculative):** −0.17% of the record's 96,996,198 B archive is about
   −165 KB for about 1 h. That is the same order as ex-girlfriend's −135 KB on neif. Slice caveats apply: the
