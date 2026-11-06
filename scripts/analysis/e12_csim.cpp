@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
   const double lr = par("lr", 0.002), eps = par("eps", 1e-4);
   if (par("stream", 0)) {  // argv[1] is a raw coded stream (e.g. build/exp/A1/full/full.stream): count slots, time it
     FILE* sf = fopen(argv[1], "rb");
-    e12::ArithSpec sp(argv[2]);
+    e12::ArithSpec sp(argv[2], par("hdr", 0) != 0);
     if (!sf || !sp.ok) { fprintf(stderr, "open?\n"); return 1; }
     std::vector<uint8_t> buf(1 << 20);
     size_t got, total = 0;

@@ -1,22 +1,24 @@
 diff --git a/src/predictor.cpp b/src/predictor.cpp
-index c5762d2..c22ed6c 100644
+index c5762d2..bf1b07b 100644
 --- a/src/predictor.cpp
 +++ b/src/predictor.cpp
-@@ -241,6 +241,13 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+@@ -241,6 +241,15 @@ Predictor::Predictor(const std::vector<bool>& vocab,
      sigmoid_(100001), vocab_(vocab), ppmd_only_(options.ppmd_only),
      transformer_only_(options.transformer_only),
      num_input_bytes_(options.num_input_bytes) {
 +  if (const char* d = getenv("E12_DICT")) {
 +    if (*d && !options.ppmd_only && !options.transformer_only) {
-+      e12_ = std::make_unique<e12::E12Mix>(d);
++      const char* lr = getenv("E12_LR");
++      e12_ = std::make_unique<e12::E12Mix>(d, options.e12_coded_block_header, lr && *lr ? atof(lr) : 0.002);
 +      if (!e12_->spec.ok) { fprintf(stderr, "E12: cannot read dictionary %s\n", d); exit(1); }
-+      fprintf(stderr, "E12: arithmetic specialist on (%s)\n", d);
++      fprintf(stderr, "E12: arithmetic specialist on (%s, coded block header %d, lr %s)\n", d,
++              (int)options.e12_coded_block_header, lr && *lr ? lr : "0.002");
 +    }
 +  }
    for (int i = 0; i < 256; ++i) {
      if (vocab_[i]) vocab_bytes_.push_back(i);
    }
-@@ -557,6 +564,7 @@ float Predictor::Predict() {
+@@ -557,6 +566,7 @@ float Predictor::Predict() {
    p = Sigmoid::Logistic(mixer_1_[0].Mix());
    }
    { PROF(SSE_); p = sse_.Predict(p); }
@@ -24,7 +26,7 @@ index c5762d2..c22ed6c 100644
    if (byte_mixer_override >= 0) {
      return byte_mixer_override;
    }
-@@ -698,6 +706,7 @@ void Predictor::Perceive(int bit) {
+@@ -698,6 +708,7 @@ void Predictor::Perceive(int bit) {
      }
      return;
    }
@@ -33,7 +35,7 @@ index c5762d2..c22ed6c 100644
    PROF(CMO);
    bracket_model_->Perceive(bit);
 diff --git a/src/predictor.h b/src/predictor.h
-index 12d7c01..3e1732d 100644
+index 12d7c01..d7f3f4d 100644
 --- a/src/predictor.h
 +++ b/src/predictor.h
 @@ -16,6 +16,7 @@
@@ -44,7 +46,17 @@ index 12d7c01..3e1732d 100644
  #include "mixer/lstm.h"
  #include "contexts/context-hash.h"
  #include "contexts/bracket-context.h"
-@@ -179,6 +180,8 @@ class Predictor {
+@@ -47,6 +48,9 @@ void Fx2ProfReport(uint64_t loop_ticks, double loop_seconds, unsigned long long
+ #endif
+ 
+ struct PredictorOptions {
++  // [E12] true when the coded stream starts with preprocessor::Encode's 5-byte block header (-e / archive9 mode);
++  // runner.cpp stores that header raw in -c/-d with --transformer (slice mode).
++  bool e12_coded_block_header = false;
+   // Run only the ppmd model. Predict() returns the ppmd's bit prediction and
+   // no other model is constructed or updated.
+   bool ppmd_only = false;
+@@ -179,6 +183,8 @@ class Predictor {
    // Pretrained transformer replacing the lstm (see
    // PredictorOptions::transformer_weights).
    std::unique_ptr<fx2::opt::TransformerOpt> transformer_;
@@ -53,3 +65,23 @@ index 12d7c01..3e1732d 100644
    int byte_to_index_[256];
    std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
    std::vector<float> transformer_probs_; // the transformer's output row
+diff --git a/src/runner.cpp b/src/runner.cpp
+index 9cabd82..a15cdcc 100644
+--- a/src/runner.cpp
++++ b/src/runner.cpp
+@@ -907,6 +907,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   predictor_options.load_transformer_probs = extraction.load_transformer_probs;
+   predictor_options.num_input_bytes = temp_bytes;
+   predictor_options.transformer_weights = transformer_weights;
++  predictor_options.e12_coded_block_header = !g_raw_block_header;  // [E12]
+   predictor_options.save_transformer_probs = extraction.save_transformer_probs;
+ #ifdef FX2_PROF
+   auto fx2_c0 = std::chrono::steady_clock::now();
+@@ -989,6 +990,7 @@ bool RunDecompression(const std::string& input_path,
+   }
+   PredictorOptions predictor_options;
+   predictor_options.transformer_weights = transformer_weights;
++  predictor_options.e12_coded_block_header = !g_raw_block_header;  // [E12]
+   predictor_options.num_input_bytes = *output_bytes;
+   predictor_options.ppmd_only = extraction.ppmd_only;
+   predictor_options.transformer_only = extraction.transformer_only;

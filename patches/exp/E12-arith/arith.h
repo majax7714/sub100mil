@@ -169,7 +169,10 @@ class ArithSpec {
  public:
   bool ok = false;
 
-  explicit ArithSpec(const char* dict_path) {
+  // coded_block_header: the coded stream starts with preprocessor::Encode's 5-byte block header (type, length)
+  // before the WRT flag byte. True in cmix's -e / archive9 mode (full enwik9); false in -c/-d with --transformer
+  // (slice mode), where runner.cpp stores that header raw and the first coded byte is the WRT flag.
+  explicit ArithSpec(const char* dict_path, bool coded_block_header = false) : skip_(coded_block_header ? 6 : 1) {
     init_swap();
     FILE* f = fopen(dict_path, "rb");
     if (!f) return;
@@ -280,6 +283,7 @@ class ArithSpec {
   int SWAP_[256];
   std::unordered_map<uint32_t, std::string> dict_;
   long nbytes_ = 0;
+  int skip_;  // leading coded bytes that are not text: [block header (5)] + the WRT flag byte
   bool upper_ = false, capital_ = false, esc_ = false;
   int code_need_ = 0;  // >0: inside a multi-byte dictionary code
   uint32_t code_ = 0;
@@ -300,7 +304,7 @@ class ArithSpec {
   void Byte(uint8_t byte) {
     follow(byte);
     nbytes_++;
-    if (nbytes_ == 1) return;  // the WRT flag byte of the TEXT block
+    if (nbytes_ <= skip_) return;  // block header and WRT flag byte of the (single) TEXT block
     int c = SWAP_[byte];
     size_t before = art_.size();
     if (code_need_ > 0) {
@@ -797,7 +801,8 @@ class ArithSpec {
 // stretch(StateMap[class, q(p1), byte position, bit]) and stretch(clamped p1), weight set (class, state, bit).
 class E12Mix {
  public:
-  explicit E12Mix(const char* dict) : spec(dict), smp_(NCLS * 14 * 4 * 8, 0.5f), smn_(NCLS * 14 * 4 * 8, 0),
+  explicit E12Mix(const char* dict, bool coded_block_header = false, double lr = 0.002)
+      : spec(dict, coded_block_header), lr_(lr), smp_(NCLS * 14 * 4 * 8, 0.5f), smn_(NCLS * 14 * 4 * 8, 0),
                                        w_(NCLS * 4 * 8 * 4, 0.0) {
     for (size_t s = 0; s < w_.size(); s += 4) w_[s] = 1.0;
   }
@@ -826,7 +831,7 @@ class E12Mix {
   void Update(int y) {
     if (on_) {
       double err = y - pf_;
-      for (int i = 0; i < 4; i++) w_[set_ + i] += 0.002 * err * x_[i];
+      for (int i = 0; i < 4; i++) w_[set_ + i] += lr_ * err * x_[i];
       if (smi_ >= 0) {
         if (smn_[smi_] < 1023) smn_[smi_]++;
         smp_[smi_] += (y - smp_[smi_]) / (smn_[smi_] + 0.5);
@@ -847,6 +852,7 @@ class E12Mix {
     int q = (int)std::floor((st + 9) / 1.5) + 1;
     return q < 1 ? 1 : q > 12 ? 12 : q;
   }
+  double lr_;
   std::vector<float> smp_;
   std::vector<uint16_t> smn_;
   std::vector<double> w_;
