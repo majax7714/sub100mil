@@ -12,6 +12,33 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-06: X2 second cross-domain dart is a GO: the metadata timestamps follow a "stratigraphy" law
+- **Type:** model addition (non-transformer specialist), offline evaluation; the real build is in progress.
+- **Did:** a new cross-domain survey from two angles (docs/design/X2-cross-domain.md):
+  - **Track A** covered fields X1 skipped: neuroscience, ecology, economics, linguistics, cryptanalysis, geology and others.
+  - **Track B** looked for values in article text that a domain law fixes, following E12's lesson that the record can't compute: ISBN check
+    digits, chronologies, ordinals, molar mass, Kepler, table sums and so on (about 30 candidates).
+  - Every candidate was counted on enwik9 and priced with the record's per-byte cost dumps before testing. Commits 7abe95a, 5f6f82a; the
+    text-law sub-results are in `attic/2026-11-06-X2-text-laws/`.
+- **Numbers:**
+  - **Text laws:** about 150 KB at stake in total. Sims gave 10M +327 B (ISBN +168, chronology +170), about 14 KB projected: NO-GO.
+  - **Metadata time law:** Wikipedia issues revision ids in time order, so each page's timestamp in phda9's metadata block is a monotone function
+    of the revision id just before it. There are 154,990 slots, which the record codes at 10.8–15.7 bits each (about 210 KB at stake).
+    - Sims: 10M +116 B; census mid10M +1,332 B (54% of timestamp bits removed).
+    - Nine 1 MB proxies of the full run's *reordered* metadata block, cost-logged with the record: +1.1 to 2.3 KB each, about 6–8 bits saved
+      per timestamp.
+    - **Full enwik9 ESTIMATE about 127 KB (85–135 KB)**, including 7.4 KB from a redirect page-id law.
+    - Cost: seconds of CPU, under 20 MB, about 2 KB of S.
+  - No ledger rows: the observation-only proxy runs produced no archives to verify.
+- **Learned:**
+  - The second computable-structure win is outside the article text. The CM and the transformer can't interpolate a monotone curve
+    (revision id → time) any more than they can divide.
+  - The page-id-from-article-order law (about 200 KB at stake) is *not* decoder-valid: `archive9` doesn't carry the order file, and those
+    deltas are how the reorder's permutation reaches the decoder.
+  - Interlanguage links hold about 835 KB but are already cheap (1.2–1.5 bits per byte).
+- **Next:** build it as `patches/exp/X2-timelaw/` stacked on E12-arith; real round-trip benches on the proxies vs the record and E12 alone; the
+  30K-record warm proxy; then fold into C2.
+
 ## 2026-11-06: Batch 3 (off-plan darts): E12 arithmetic consistency is a GO; X1 cross-domain and A3 encoder-side selection are NO-GO
 - **Type:** E12 model addition (non-transformer specialist); X1 model addition (non-transformer, cross-domain synthesis, offline); A3 architectural
   (asymmetric compute). The batch was deliberately off the transformer path: two non-transformer darts plus one new way of spending compute.
