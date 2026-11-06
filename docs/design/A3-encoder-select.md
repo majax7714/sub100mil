@@ -4,13 +4,14 @@
 the best one and sends the choice. The decoder replays only that variant. The first target was the E2 online logit
 head, with K learning-rate multipliers. On the 10M slice the **upper bound**, a per-block oracle over K = 10
 independent head trajectories, is worth only **−149 B of head loss net of side info vs the best fixed LR (16K-token
-blocks), about −83 B coded [ESTIMATE]**. The decision rule asked for −380 B. The **realizable** version
+blocks), at most about −83 B coded [ESTIMATE], and more likely about −16 B**. A real bench showed that a
+*marginal* head-loss gain converts to coded bytes at only ≈0.11 inside C1 (§4). The decision rule asked for −380 B. The **realizable** version
 (fork-and-commit) is worse still. Greedy per-block selection *loses* to the best fixed LR at every block size of
 16K tokens or less: what wins inside one block (often a larger step, sometimes a frozen head) leaves a worse state for
 the blocks after it. With an H-block lookahead the best point is −42 B of head loss net (≈ −24 B coded), at
 30× the head cost in the encoder (§3). No coder change was built. The one
-useful by-product is plain tuning: halving E2's LR (a 0.25→0.05) is the best fixed setting, at −427 B of head loss on
-10M (§4, bench row).
+by-product is plain tuning: halving E2's LR (a 0.25→0.05) is the best fixed setting for the head (−427 B of head loss
+on 10M). Inside C1, though, it gains only −45 B coded (1,261,970 vs 1,262,015, round-trip OK; §4).
 
 Labels as in docs/design/A1-retrieval.md:
 - **[M]** measured here.
@@ -39,8 +40,9 @@ block.
 nats for E2 minus static in the real run. The small rest comes from the 173 piece-start tokens and the fp16 row.
 
 **Calibration from head loss to coded bytes [M].** On 10M, E2's head improves on the static head by 20,971 nats
-(3,782 B), and E2 is worth −2,123 B coded. So 1 B of head loss ≈ 0.56 B coded (0.83 on 1M). Applying the same factor
-to *marginal* head improvements is an assumption [ESTIMATE].
+(3,782 B), and E2 is worth −2,123 B coded. So 1 B of head loss ≈ 0.56 B coded (0.83 on 1M). For *marginal* head
+improvements on top of an existing head, the factor is much lower. Halving the LR gains −427 B of head loss but only
+−45 B coded in C1 (§4), a factor of ≈ 0.11 [M]. The ×0.56 column below is therefore a generous ceiling.
 
 ## 1. Upper bound: oracle over independent trajectories [M]
 
@@ -104,7 +106,14 @@ state.
 ## 4. By-product: retune E2's LR (tuning) [M]/[ESTIMATE]
 
 m = 0.5 (`E2_A0=0.25 E2_AF=0.05`) is the best fixed LR on both 1M and 10M: −427 B of head loss on 10M → about −240 B
-coded [ESTIMATE]. Bench on top of C1 (`E2_A0=0.25 E2_AF=0.05`, method `fx2T+C1-a3-lr05`): pending.
+coded at the ×0.56 factor [ESTIMATE].
+
+**Bench [M]:** C1 with `E2_A0=0.25 E2_AF=0.05` (method `fx2T+C1-a3-lr05`, commit 9870d53, 10M): **1,261,970 B**
+(1.0096 bpb) vs C1's 1,262,015. That is **−45 B (−0.004%)**. Round-trip OK, peak RSS 5,811 MiB, timing contended
+(1,958 / 1,688 s). The head's own gain mostly does not reach the coded stream. The mixers (and E1's confidence
+gating, which overlaps with E2) already discount the head where it is noisy. So the head-loss proxy overstates
+marginal changes by about 5×. This also deflates the A3 bound in §1 to ≈ −16 B coded. The LR change is not worth
+keeping as its own item, but it costs nothing, so it can be folded into the next C1 retune.
 
 ## 5. Cost (ESTIMATE)
 

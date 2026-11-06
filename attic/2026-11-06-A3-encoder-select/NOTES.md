@@ -19,7 +19,8 @@ Classification: architectural (a new way of spending the compute budget).
 calibrated on E2's own −2,123 B):
 - Best fixed LR: m = 0.5, −427 B of head loss vs E2's m = 1. That is plain tuning.
 - **Upper bound** (oracle over independent trajectories, net of adaptive side info, vs the best fixed): −42 (4K
-  blocks), **−149 (16K)**, −127 (64K), −85 (256K), −48 (1M). That is ≈ −83 B coded at best, 4.6× below the bar.
+  blocks), **−149 (16K)**, −127 (64K), −85 (256K), −48 (1M). That is ≈ −83 B coded at ×0.56, 4.6× below the bar.
+  At the measured marginal factor of ≈0.11 (see the bench below) it is ≈ −16 B.
 - **Fork-and-commit, greedy** (vs the best fixed, before side info): +1,648 (4K), +410 (16K), −6.5 (64K), +16 (256K).
   It *loses*.
 - **Fork-and-commit with lookahead** (score = block + next H blocks at m = 0.5), net of side info: 4K/H4 +268,
@@ -50,6 +51,8 @@ too exceed the headroom.
 **What we'd do differently:**
 - Run the cheap non-stationarity check first (one `indep` pass, ≈ 5 min on 10M) before designing fork machinery.
 - If a knob's per-block winners cluster at the global optimum, just retune it. Here: E2 logit LR × 0.5
-  (`E2_A0=0.25 E2_AF=0.05`); bench in the design doc §4.
+  (`E2_A0=0.25 E2_AF=0.05`). **Bench [M]:** C1 10M 1,261,970 vs 1,262,015, so −45 B, round-trip OK (ledger
+  `fx2T+C1-a3-lr05`). −427 B of head loss became only −45 B coded: head-loss proxies overstate marginal head changes
+  by about 5×.
 - Any speedup frees time in both directions, and spending it symmetrically (§2: K heads mixed) was worth more than
   selection. So revisit only for a discrete state decision that a mixer cannot express and that has a cheap proxy.
