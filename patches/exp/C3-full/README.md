@@ -19,13 +19,16 @@ real full-mode path: `comp9 -e enwik9` → `archive9`, then `./archive9` with no
   (version 1, `costlog.py` reads it). One change: E3's BITLSTM correction is applied in the coder after
   `Predict()`, so the coder reports the probability it really coded with (`CostLogCoded`), and `cost`/`pbit` are
   the true coded costs (after SSE, E1 APM, E12, X2, the override and E3). Observation only.
-- `build.sh`: builds `build/exp/C3-full/bin/{cmix, cmix_costlog, comp9, comp9_costlog}` (PGO+LTO, x86-64-v3,
+- `build.sh`: builds `build/exp/C3-full/bin/{cmix, cmix_costlog, comp9, comp9_costlog}` (PGO+LTO trained with the
+  dictionary so E12/X2 are profiled, x86-64-v3,
   the record's guards, fails if any `getenv` other than the diagnostic `FX2_PRINT_VOCAB` remains).
   `comp9_costlog` carries the same comp_dict/comp_order/weights/header as `comp9`. `bin/comp9.parts` = sizes.
 - `full_cmd.sh comp|decomp in out`: bench.sh wrapper for full mode (see its header). comp runs `comp9_costlog -e`
   under `env -i` (only `FX2_COSTLOG` passes) and then swaps the clean `cmix` in as archive9's decompressor; decomp
   runs that `./archive9` under `env -i`. So the round trip checks the submission decoder **and** that the costlog
   twin produced the submission's archive.
+- `smoke.sh DIR CODE_MIN DEC_MIN`, `identity_1M.sh DIR`: the pre-launch checks below. `launch.sh`: the detached
+  full run (writes build/exp/FULL/STATUS.md).
 - `fullstream_check.cpp`: runs E12 + X2 exactly as the -e build constructs them over the real full coded stream
   (`build/exp/E12/full/e9.stream`) with p_in = 0.5: a crash/time/slot-count check, not a size estimate.
 
@@ -64,6 +67,30 @@ env -i PATH=/usr/bin:/bin HOME=$HOME BENCH_TMP=$PWD/build/exp/C3-full/benchtmp F
 The per-byte cost dump (`build/exp/FULL/cost_full.bin`, ~23 GB) is the reusable product: future specialists can be
 simulated against real warm full-file costs instead of rerunning 30+ h per idea.
 
+## Pre-launch checks (2026-11-07, all on this box, contended)
+
+| check | result |
+|---|---|
+| clean `cmix`, 1M slice under `env -i` | **126,244 B** = fx2T+C3-v1, round-trip OK (ledger `fx2T+C3-full-clean`) |
+| costlog twin vs clean, 1M (`identity_1M.sh`) | archives **byte-identical**; log sum 126,201 B + 43 B header/flush |
+| PGO training without dictionary (`PGO_TRAIN=nodict`, kept in `build/exp/C3-full-nodict`) | also 126,244 and costlog-identical, but exe 686,456 B vs 612,760 B; comp_dict/comp_order byte-identical across the two PGO variants |
+| `fullstream_check` over the real -e stream (586,459,020 B) | no crash; 880 s (1.5 µs/byte contended); E12 slots 1,380,293; X2 time slots 154,985, rpid 70,571; RSS 86 MB |
+| smoke (`smoke.sh`, nodict binaries): `comp9_costlog -e enwik9`, killed after 15 min of coding | self-extraction of order + dict by the costlog binary passes `VerifyDictionary` (decodes the clean binary's comp_dict); preprocessing → coding in 11 min; E12/X2 on `.dict` with block header 1, E2 a0 0.25 af 0.05, BITL lr 0.003 accum 1, 26 stage-1 cols; cost-log sum at 1,172,918 coded bytes 100,483 B vs coder output 100,485 B; RSS 5.07 GB at coder start → 5.87 GB after 13 min; ~420–510 µs per coded byte under batch-4 load |
+| smoke step 2: clean archive9 layout | clean binary extracts and verifies the dictionary, builds E12/X2 on `./.dict`; a partial decode is impossible (the Encoder holds the whole archive in memory until Flush, so a killed -e leaves an empty payload) |
+
+### comp9 size (un-UPX'd) vs the record's build
+
+| part | record (our g++ build) | C3-full |
+|---|---:|---:|
+| executable | 369,792 | 612,760 (+242,968: E1/E2/E3/E12/X2 code, E12's std::regex) |
+| comp_dict | 100,114 | 99,889 |
+| comp_order | 201,077 | 200,493 |
+| comp_tfweights | 2,930,652 | 2,930,652 |
+| header | 16 | 16 |
+| **comp9** | **3,601,651** | **3,843,810 (+242,159)** |
+
+The executable also sits inside archive9, so it counts twice in S (UPX would shrink both copies; separate item).
+
 ## Results
 
-(see below; filled in by the run)
+(full run in progress: build/exp/FULL/STATUS.md)
