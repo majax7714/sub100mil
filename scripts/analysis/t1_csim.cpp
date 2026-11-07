@@ -34,14 +34,21 @@ int main(int argc, char** argv) {
     std::unique_ptr<t1::FieldCopy> sp(new t1::FieldCopy(argv[2], false));
     std::vector<unsigned char> buf(1 << 20);
     size_t r, tot = 0;
+    long bycls[t1::NCLS] = {0};
     auto t0 = std::chrono::steady_clock::now();
     while ((r = fread(buf.data(), 1, buf.size(), sf)) > 0) {
-      for (size_t i = 0; i < r; i++) for (int b = 7; b >= 0; b--) { int c; sp->InSlot(&c); sp->Bit((buf[i] >> b) & 1); }
+      for (size_t i = 0; i < r; i++) for (int b = 7; b >= 0; b--) {
+        long before = sp->slots_opened;
+        sp->Bit((buf[i] >> b) & 1);
+        int c;
+        if (sp->slots_opened != before && sp->InSlot(&c)) bycls[c]++;
+      }
       tot += r;
     }
     double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     printf("stream %zu B: titles queued %ld, groups %ld, slots %ld, title links %ld; %.1f s (%.3f us/B)\n", tot,
            sp->titles_queued, sp->groups_seen, sp->slots_opened, sp->eq_links, s, 1e6 * s / tot);
+    for (int c = 0; c < t1::NCLS; c++) printf("  class %2d: %ld slots\n", c, bycls[c]);
     return 0;
   }
   std::ifstream f(argv[1], std::ios::binary);
@@ -59,13 +66,14 @@ int main(int argc, char** argv) {
     fprintf(stderr, "seeded %ld languages\n", k);
   }
   double rec = 0, full = 0, cr[t1::NCLS] = {0}, cf[t1::NCLS] = {0};
-  long inb = 0;
+  long inb = 0, ns[t1::NCLS] = {0};
   for (size_t i = 0; i < n; i++) {
     for (int b = 0; b < 8; b++) {
       int y = (R[i].byte >> (7 - b)) & 1;
       double pr = R[i].pbit[b] / 65536.0;
       float p = (float)pr;
       int cls = -1;
+      long before = m->spec.slots_opened;
       bool in = m->spec.InSlot(&cls);
       p = m->Predict(p);
       double pf = 1 + 65534.0 * p; pf = (int)pf / 65536.0;
@@ -74,12 +82,15 @@ int main(int argc, char** argv) {
       full += -std::log2(y ? pf : 1 - pf);
       if (in) { cr[cls] += -std::log2(y ? pr : 1 - pr); cf[cls] += -std::log2(y ? pf : 1 - pf); inb++; }
       m->Update(y);
+      int c2;
+      if (m->spec.slots_opened != before && m->spec.InSlot(&c2)) ns[c2]++;
     }
   }
   printf("coded bytes %zu: record %.0f B, with T1 %.0f B (%+.0f B)\n", n, rec / 8, full / 8, (full - rec) / 8);
   printf("titles queued %ld, groups %ld, slots %ld, title links %ld, in-slot bits %ld\n", m->spec.titles_queued,
          m->spec.groups_seen, m->spec.slots_opened, m->spec.eq_links, inb);
   for (int c = 0; c < t1::NCLS; c++)
-    if (cr[c] > 0) printf("  class %2d: %.0f -> %.0f B (%+.0f)\n", c, cr[c] / 8, cf[c] / 8, (cf[c] - cr[c]) / 8);
+    if (cr[c] > 0) printf("  class %2d: %ld slots, %.0f -> %.0f B (%+.0f), %+.3f bits/slot\n", c, ns[c], cr[c] / 8, cf[c] / 8,
+                          (cf[c] - cr[c]) / 8, ns[c] ? (cf[c] - cr[c]) / ns[c] : 0.0);
   return 0;
 }
