@@ -24,13 +24,16 @@ Newest entries first. One entry per session or experiment. Format:
   - **C2:** 10M 1,261,828 (−2,854 vs record); census 10M 323,802 (−14,180, −4.20%).
   - **C3:** 10M **1,261,700 (−2,982, −0.236%)**, the new best; 1M 126,244.
   - On an X2 test file, C2 25,219 → C3 24,175 (−1,044, vs −1,046 for X2 on the record alone), so the stages stack without overlap.
-  - The C2 100M run was still in flight at session end.
-  - Ledger rows added this entry: 8 (committed by the agents).
+  - **C2 100M: 11,980,914 vs record 12,006,323 (−25,409, −0.212%) and E2 alone 11,988,349 (−7,435)**, round-trip OK (0425f65). Peak RSS
+    6,577.5 MiB, +20 MiB over E2 alone. Contended: comp 18,513 s, decomp 12,207 s.
+  - C2 cost on the reference machine (ESTIMATE): 37.2 h (record) + about 3.1 h (C1) + about 0.2 h (E12) ≈ **40.5 h per direction**, under the
+    45 h target. RAM about +20 MiB over the record's 9.66 GB, and the record alone is already above our 9.5e9 target, so the full run must check it.
+  - Ledger rows added this entry: 9 (committed by the agents).
 - **Decided:** no more 100M checks before the full run. 100M is blind to E12/X2 (few census articles, little metadata, no reordering).
   Instead, run C3 on full enwik9 with the per-byte cost log on, so the run doubles as an offline test set for future specialists. The user
   asked for this to start fresh next session rather than be queued at the end of a long one. The plan is in docs/EXPERIMENTS.md, "Next
   session starts here".
-- **Next:** check the C2 100M ledger row; build the full-mode harness with the switches baked in (env vars and the external `english.dic`
+- **Next:** build the full-mode harness with the switches baked in (env vars and the external `english.dic`
   path aren't allowed in a submission); run the C3 full run; batch 4 alongside.
 
 ## 2026-11-06: X2 second cross-domain dart is a GO: the metadata timestamps follow a "stratigraphy" law

@@ -35,8 +35,7 @@ What the run must answer: actual S; peak RSS against the 10 GB limit (the record
 whether E12 + X2 deliver their projected ~300 KB (170 + 127 KB) against the warm, reordered full-run CM.
 
 Steps:
-1. Check that the C2 100M row is in the ledger (it was in flight at the end of the 2026-11-06 session). If it's missing, rerun
-   `patches/exp/C2-combo/run.sh` on enwik9_100M.
+1. (Done 2026-11-06: C2 100M 11,980,914, −0.212% vs record, round-trip OK. C2/C3 cost is about 40.5 h per direction, an estimate.)
 2. Build a full-mode harness (none exists yet; `slice_cmd.sh` is slice-only): the record's `-e`/`archive9` path with the C3 binary, plus the
    per-byte cost patch (`patches/tools/per-byte-cost/`) stacked on C3.
    - **The runtime switches must be baked in.** The submission can't depend on env vars or external files. The E2/E3/E12/X2 env settings
@@ -72,7 +71,7 @@ Steps:
 | A3 | **Encoder-side selection:** fork a cheap component's state per block, try K variants, commit the best, send the choice; the decoder replays only the winner (first target: E2 head LR) | architectural (asymmetric compute) | encoder K× head cost (K=4 about 3.1 h), decoder about 1× | Everything in the record is symmetric; the encoder could search | **NO-GO** (attic/2026-11-06-A3-encoder-select): 10M oracle −149 B head loss (≈ −16 to −83 B coded), greedy fork-and-commit loses. By-product: E2 LR ×0.5 in C1, 10M 1,261,970 (−45 B) |
 | X1 | **Cross-domain synthesis:** 25 mechanisms from physics, biology and chemistry mapped to bytes; tested Potts/DCA token couplings within an article and coarse-grained state as a final context | model addition (non-transformer), offline | about 6–7 µs per byte, 0.6–1.2 GB (over the RAM headroom) | A deliberate long shot from outside CS | **NO-GO** (attic/2026-11-06-X1-cross-domain): couplings +0.03% on 10M over a warm control, about 35 KB (10–60 KB) projected; coarse state ≤ 28 B. The survey table is in docs/design/X1-cross-domain.md |
 | X2 | **Cross-domain round 2** (fields X1 skipped + domain laws as computation). Hit: **metadata time law**: revision ids are time-ordered, so each page's timestamp in phda9's metadata block is predictable from its revision id (stratigraphy analogy); plus a redirect page-id law | model addition (non-transformer specialist) | seconds of CPU, <20 MB, about 2 KB of S | E12's lesson: the record is blind to computation, wherever the structure lives | **GO, real build round-trips** (patches/exp/X2-timelaw, final stage after E12): proxies −534/−554/−1,046 B over E12 per MB, equal to the sim within 1 B. 154,990 slots at 10.8–15.7 bits; reordered-block proxies +1.1 to 2.3 KB per MB; **full enwik9 ESTIMATE about 127 KB (85–135 KB)**. Text laws (ISBN, chronology, …) NO-GO, about 14 KB (attic/2026-11-06-X2-text-laws). Next: fold into C2, 30K warm proxy |
-| C2 | **Combination** C1 + E2 logit LR ×0.5 + E12 (lr 0.004) | combination | C1's cost + about 0.2 h | Fold the batch-3 wins | **10M 1,261,828 (−2,854 vs record)**; census 10M slice 323,802 (−4.20%); 100M in flight at the end of the 2026-11-06 session (patches/exp/C2-combo) |
+| C2 | **Combination** C1 + E2 logit LR ×0.5 + E12 (lr 0.004) | combination | C1's cost + about 0.2 h | Fold the batch-3 wins | **10M 1,261,828 (−2,854 vs record)**; census 10M slice 323,802 (−4.20%); **100M 11,980,914 (−25,409, −0.212% vs record; −7,435 vs E2 alone)**; about 40.5 h per direction (ESTIMATE), +20 MiB (patches/exp/C2-combo) |
 | C3 | **Combination** C2 + X2 metadata time law | combination | C2's + seconds | Fold X2 | **current best: 10M 1,261,700 (−2,982, −0.236% vs record)**; 1M 126,244; X2 proxy r130K: C2 25,219 → C3 24,175 (−1,044, same as on the record alone). **Next: full enwik9 run** (see top) (patches/exp/C3-combo) |
 
 ## Shared tooling
