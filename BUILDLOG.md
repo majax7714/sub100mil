@@ -12,6 +12,27 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-06: C2 and C3 folded; next session starts with the C3 full enwik9 run
+- **Type:** combination (plus tooling).
+- **Did:**
+  - The E12 agent added page-aligned mid slices `enwik9_mid10M_pa` / `enwik9_mid1M_pa` to `fetch_data.sh` (113836e).
+  - E12 full-mode support, so it skips the coded block header in `-e`/archive9 mode (fbcd406); E12 mixer lr 0.004.
+  - C2 = C1 + E2 LR ×0.5 + E12 (`patches/exp/C2-combo`, 795123d).
+  - C3 = C2 + X2 time law (`patches/exp/C3-combo`, 1ce8fd0).
+- **Numbers (all round-trip OK):**
+  - E12 lr 0.004: census 1M slice 29,920 (−4.74% vs record), census 10M 324,627 (−13,355, −3.95%).
+  - **C2:** 10M 1,261,828 (−2,854 vs record); census 10M 323,802 (−14,180, −4.20%).
+  - **C3:** 10M **1,261,700 (−2,982, −0.236%)**, the new best; 1M 126,244.
+  - On an X2 test file, C2 25,219 → C3 24,175 (−1,044, vs −1,046 for X2 on the record alone), so the stages stack without overlap.
+  - The C2 100M run was still in flight at session end.
+  - Ledger rows added this entry: 8 (committed by the agents).
+- **Decided:** no more 100M checks before the full run. 100M is blind to E12/X2 (few census articles, little metadata, no reordering).
+  Instead, run C3 on full enwik9 with the per-byte cost log on, so the run doubles as an offline test set for future specialists. The user
+  asked for this to start fresh next session rather than be queued at the end of a long one. The plan is in docs/EXPERIMENTS.md, "Next
+  session starts here".
+- **Next:** check the C2 100M ledger row; build the full-mode harness with the switches baked in (env vars and the external `english.dic`
+  path aren't allowed in a submission); run the C3 full run; batch 4 alongside.
+
 ## 2026-11-06: X2 second cross-domain dart is a GO: the metadata timestamps follow a "stratigraphy" law
 - **Type:** model addition (non-transformer specialist), offline evaluation; the real build is in progress.
 - **Did:** a new cross-domain survey from two angles (docs/design/X2-cross-domain.md):

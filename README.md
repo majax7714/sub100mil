@@ -14,7 +14,9 @@ An attempt to compress **enwik9** (the Hutter Prize corpus) to a total size of
 | Slice | Bytes | bpb | Commit |
 |-------|-------|-----|--------|
 | record + E10 dynamic evaluation bk12q4d (ours), enwik9_10M slice; **over the time budget** (about 5.7 h, an estimate) | 1,261,985 | 1.0096 | 3caaaba |
-| **record + C1 (E1 + E2 + E3 + E9) with E2 LR ×0.5** (ours), enwik9_10M slice; best that fits the budget | **1,261,970** | 1.0096 | 0f73794 |
+| **record + C3 (C1 + E2 LR ×0.5 + E12 arithmetic + X2 time law)** (ours), enwik9_10M slice; best that fits the budget | **1,261,700** | 1.0094 | 971bfd6 |
+| record + C2 (C1 + E2 LR ×0.5 + E12) (ours), census 10M slice `enwik9_mid10M_pa` (record 337,982, −4.20%) | 323,802 | 0.2590 | 14961a8 |
+| record + C1 with E2 LR ×0.5 (ours), enwik9_10M slice | 1,261,970 | 1.0096 | 0f73794 |
 | record + C1 (E1 + E2 + E3 + E9) (ours), enwik9_10M slice | 1,262,015 | 1.0096 | 0707157 |
 | record + E12 arithmetic specialist (ours), census 10M slice `enwik9_mid10M_pa` (record 337,982 → 325,041, −3.83%) | 325,041 | 0.2600 | dd082f9 |
 | record + E12 arithmetic specialist (ours), enwik9_10M slice (record 1,264,682) | 1,264,559 | 1.0116 | 4edce68 |
@@ -24,7 +26,7 @@ An attempt to compress **enwik9** (the Hutter Prize corpus) to a total size of
 | *reference:* record fx2-cmix-transformer (g++ build), enwik9_10M slice | 1,264,682 | 1.0117 | 44a7ea1 |
 | *reference:* cmix-neif (g++ build), first 10M of its preprocessed stream | 1,918,894 | 1.535 | 5146837 |
 
-The references aren't our work. Our gains over the record are confirmed on slices up to 100M (E2: −0.150% on 100M) but not yet at full scale. Experiment backlog: [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
+The references aren't our work. Our gains over the record are confirmed on slices up to 100M (E2: −0.150% on 100M) but not yet at full scale. E12 and X2 gain mostly on parts of enwik9 that slices barely contain (census articles, the metadata block); their full-scale projections (about 170 + 127 KB) are estimates until the first full run. Experiment backlog: [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md).
 
 ## Getting the data
 
