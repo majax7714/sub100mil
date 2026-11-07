@@ -10,7 +10,7 @@ gcc -O2 -o "$W/pack" "$D/pack.c"
 cd "$W"
 gcc -Os -march=x86-64 -mtune=generic -static -nostdlib -nostartfiles -ffreestanding -fno-pie -no-pie \
   -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-stack-protector -fcf-protection=none -fno-ident \
-  -I"$D" -Wl,--build-id=none -Wl,-N -Wl,-s -Wl,--gc-sections -Wl,-z,norelro -Wl,-z,noexecstack \
+  -I"$D" -Wl,--build-id=none -Wl,-z,noseparate-code -Wl,-s -Wl,--gc-sections -Wl,-z,norelro -Wl,-z,noexecstack \
   -o "$OUT" "$D/stub.c"
 chmod +x "$OUT"
 echo "$(stat -c %s "$IN") -> $(stat -c %s "$OUT") ($OUT; payload $(stat -c %s payload.bin))"
