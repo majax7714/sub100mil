@@ -5,7 +5,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OUT=$(realpath -m "$1"); shift
 export E2_LOGIT=1 BITL_LR_E6=3000 BITL_ACCUM=1 E2_A0=0.25 E2_AF=0.05
-export E12_DICT="$REPO/build/refs/fx2-cmix-transformer-v1/tree/dictionary/english.dic" E12_LR=0.004 X2_DICT="$E12_DICT"
+export E12_DICT="$REPO/build/refs/fx2-cmix-transformer-v1/tree/dictionary/english.dic" E12_LR=0.004
+export X2_DICT="$E12_DICT"
 W=$(mktemp -d -p "${BENCH_TMP:-/tmp}"); trap 'rm -rf "$W"' EXIT
 for sl in e200k m200k; do
   for bw in "$@"; do

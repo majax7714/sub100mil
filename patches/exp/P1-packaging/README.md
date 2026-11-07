@@ -7,6 +7,41 @@ S accounting (docs/RULES.md §1, `self_extract.h`): comp9 = exe + comp_dict + co
 archive9 = exe + comp_dict + weights + payload + header. So **every byte of exe, dict or weights counts twice in S;
 the order stream counts once.**
 
+## 0. The submission build: C3-full (patches/exp/C3-full, switches baked, PGO trained with the dictionary)
+
+Where C3-full's +242,968 B over the record's exe comes from (612,760 vs 369,792; a symbol build of C3-full's own tree
+has a byte-identical .text):
+
+| source | raw bytes | packed share (xz of that code alone) |
+|---|---:|---:|
+| std::regex, used only by E12 | +70,889 | +29,082 |
+| E12 own code | +45,817 | +18,160 |
+| E3 bit_head | +33,949 | +15,886 |
+| X2 own code | +17,242 | +9,116 |
+| fxcmv1 (E9) | +10,856 | +3,715 |
+| Predictor glue (E1/E2/E3/E12/X2 hooks) | +10,711 | +4,787 |
+| fx2 transformer (E2 head) | +5,498 | +3,060 |
+| other code (mostly std map/string/vector instances for E12/X2) | +19,785 | +10,265 |
+| .eh_frame + .eh_frame_hdr | +14,316 | |
+| .rodata | +8,784 | |
+| dynamic linking, .data, alignment | ~+5,100 | |
+
+So it's code, not tables (.rodata grew only 8.8 KB; nothing large is static data), and not PGO bloat in the
+dictionary-trained build (the no-dictionary training's extra 74 KB was PGO: partial training keeps never-run code at
+-O3). Total compressed growth is about +94 KB per copy, ~+188 KB of S.
+
+| C3-full, measured | exe | comp9 | S vs C3-full unpacked |
+|---|---:|---:|---:|
+| unpacked | 612,760 | 3,843,810 | 0 |
+| upx -9 (upstream's choice) | 286,808 | 3,517,858 | −651,904 |
+| **upx --ultra-brute --lzma (UPX alone, now)** | **247,788** | **3,478,838** | **−729,944** |
+| p1cm stub alone (no source change) | 225,152 | 3,456,202 | −775,216 |
+| **P1 full** (`build_c3full_p1.sh`: + regex-free E12, bit_head -O2, no unwind tables, rank-delta order, FX2TFWC3) | **193,384** | **3,377,271** | **−913,717** |
+
+S counts exe, dict and weights twice and the order once. P1 full is 183,773 B of S better than UPX alone, and its
+comp9 is 51,203 B smaller than the official record's (3,428,474). Its CM-coded dictionary stream is byte-identical to
+C3-full's (`comp_dict`), the order stream equals the one C3 makes from the rank-delta file.
+
 ## 1. Size breakdown of C3's comp9 (unpacked, g++15)
 
 | part | bytes | in S |
@@ -78,7 +113,14 @@ p1cm beats UPX's best by 22,016 B per copy on C3 (-44 KB of S) and by 18,880 B o
 
 `e12_re_difftest.cpp` compares every E12 pattern against std::regex at every trigger point of the text
 (tails of 400 B, percent lists, u18, number tokens, article windows): 300 KB census text: 1,172,561 tests, 36,685
-matches, 0 mismatches. [10M + mid10M_pa run: see the bench section.]
+matches, 0 mismatches; enwik9_mid10M_pa + enwik9_10M: 73,268,944 tests, 1,276,432 matches, 0 mismatches.
+
+**Biggest remaining code lever (not done, changes the profile):** `-fprofile-partial-training` keeps every function
+the PGO training run never executed at -O3. Without it the final exe is 439,584 B raw / **164,441 B packed
+(−21,837 per copy, about −44 KB of S)**. But the training run (`prof_input`, CM only) never runs the transformer
+glue, so that would be compiled for size, and a different profile can change fast-math code generation, i.e. the
+archive. Doing it needs a training run that covers the full-mode hot paths, then a speed and bit-exactness check
+(the archive would likely change, harmlessly). Out of P1's "archive bit-identical" scope.
 
 ## 4. Weights, dict and order streams
 

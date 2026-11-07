@@ -46,7 +46,7 @@ static U32 MSM[64 * 2];       // match statemap: (len bucket, expected bit)
 static short STR[4096];
 static U8 *buf;               // history (the transformed bytes seen so far)
 static U32 pos;               // bytes seen
-static U32 c0 = 1, c4, c8, bitn, h[NCTX], idx[NCTX];
+static U32 c0, c4, c8, bitn, h[NCTX], idx[NCTX];
 static int st[NIN], pr, pr1, pr2, apmi, apmw;
 static U32 mptr, mlen, mbit, msmi;
 
@@ -62,6 +62,7 @@ static int squash(int d) {
 }
 
 static void cm_init(U8 *history) {
+  c0 = 1;  // set here, not as an initializer: no .data section, so the stub file needs no page padding
   buf = history;
   int pi = 0;
   for (int x = -2047; x <= 2047; x++) {
