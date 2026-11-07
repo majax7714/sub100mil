@@ -93,4 +93,7 @@ The executable also sits inside archive9, so it counts twice in S (UPX would shr
 
 ## Results
 
-(full run in progress: build/exp/FULL/STATUS.md)
+Full run launched 2026-11-07 13:27 EST from 3e5366f (`launch.sh`; status, PIDs and progress commands in
+build/exp/FULL/STATUS.md). It reached coding after 7 min; its first 9.4 MB of cost log (≈235K coded bytes) are
+byte-identical to the smoke run's, which used the nodict-PGO binaries, so the PGO variant does not change coding in
+full mode either. RSS 5.15 GB at coder start, 5.63 GB a minute later.
