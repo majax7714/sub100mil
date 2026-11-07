@@ -1,0 +1,34 @@
+--- a/src/models/e12_arith.h
++++ b/src/models/e12_arith.h
+@@ -37,6 +37,9 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++// [P1] cold, per-slot code: optimize for size (the hot per-bit paths are a few lines)
++#pragma GCC push_options
++#pragma GCC optimize("Os")
+ namespace e12 {
+ 
+ enum Cls {
+@@ -861,3 +864,4 @@
+ };
+ 
+ }  // namespace e12
++#pragma GCC pop_options
+--- a/src/models/x2_timelaw.h
++++ b/src/models/x2_timelaw.h
+@@ -30,6 +30,9 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++// [P1] cold, per-slot code: optimize for size (the hot per-bit paths are a few lines)
++#pragma GCC push_options
++#pragma GCC optimize("Os")
+ namespace x2 {
+ 
+ enum Cls { TIME, RPID, NCLS };
+@@ -389,3 +392,4 @@
+ };
+ 
+ }  // namespace x2
++#pragma GCC pop_options

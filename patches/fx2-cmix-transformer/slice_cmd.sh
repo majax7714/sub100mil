@@ -5,13 +5,13 @@
 #   slice_cmd.sh decomp <in>    <out>   = cmix -d english.dic ... --transformer W -> slicetool post
 # Runs inside the directory of <out> (bench.sh's work dir): cmix writes ppm.temp (sparse 14 GiB
 # PPMD mmap), progress.log and removes ./.dict in its cwd.
-# Env: FX2_BIN (default build/refs/fx2-cmix-transformer-v1/cmix).
+# Env: FX2_BIN (default build/refs/fx2-cmix-transformer-v1/cmix), FX2_WEIGHTS (default the record's .tfwc2).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 R="$REPO/build/refs/fx2-cmix-transformer-v1"
 BIN="${FX2_BIN:-$R/cmix}"
 DICT="$R/tree/dictionary/english.dic"
-W="$R/tree/models/6m-q4-fp32.tfwc2"
+W="${FX2_WEIGHTS:-$R/tree/models/6m-q4-fp32.tfwc2}"
 mode="$1"; in="$(realpath "$2")"; out="$(realpath -m "$3")"
 cd "$(dirname "$out")"
 case "$mode" in

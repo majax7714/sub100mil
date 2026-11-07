@@ -1,0 +1,157 @@
+--- a/src/models/e12_arith.h
++++ b/src/models/e12_arith.h
+@@ -30,7 +30,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <map>
+-#include <regex>
++#include "e12_re.h"  // [P1] replaces <regex>
+ #include <string>
+ #include <string_view>
+ #include <tuple>
+@@ -346,9 +346,9 @@
+   }
+ 
+   // ---------------------------------------------------------------- triggers
+-  struct Trig { std::regex re; int id; std::string suffix; };
++  struct Trig { e12re::Re re; int id; std::string suffix; };
+   std::vector<Trig> trig_;
+-  std::regex re_ppl_, re_area_, re_land_, re_water_, re_dens_, re_hunits_, re_u18_, re_conv_;
++  e12re::Re re_ppl_, re_area_, re_land_, re_water_, re_dens_, re_hunits_, re_u18_, re_conv_;
+   std::vector<std::pair<std::string, std::vector<std::pair<double, double>>>> units_;
+   bool census_ = false;
+ 
+@@ -356,7 +356,7 @@
+                 T_HDENS_KM, T_HDENS_MI, T_HISP, T_HH_COPY, T_HHSIZE, T_FAMSIZE, T_SEX, T_SEX18, T_COORD1, T_COORD2 };
+ 
+   void compile() {
+-    auto R = [](const std::string& s) { return std::regex(s, std::regex::ECMAScript | std::regex::optimize); };
++    auto R = [](const std::string& s) { return e12re::Re(s); };
+     const std::string N = NUM, KMS = "km&&sup2;", MIS = "mi&&sup2;";
+     const std::string DEG = "&&\xc2\xb0";
+     std::vector<std::pair<std::string, int>> t = {
+@@ -426,10 +426,10 @@
+     if (!active_ && last == '(') try_conv();
+   }
+ 
+-  bool tail_match(const std::regex& re, std::smatch& m, size_t win = 400) {
++  bool tail_match(e12re::Re& re, e12re::Match& m, size_t win = 400) {
+     size_t st = art_.size() > win ? art_.size() - win : 0;
+     tail_ = art_.substr(st);
+-    return std::regex_search(tail_, m, re);
++    return re.search(tail_, m);
+   }
+   std::string tail_;
+ 
+@@ -442,24 +442,24 @@
+   };
+   Census parse_census() {
+     Census c;
+-    std::smatch m;
+-    if (std::regex_search(art_, m, re_ppl_)) {
++    e12re::Match m;
++    if (re_ppl_.search(art_, m)) {
+       c.ppl = true; c.P = fnum(m[1]); c.H = fnum(m[2]); c.F = fnum(m[3]); c.Hs = m[2];
+     }
+-    if (std::regex_search(art_, m, re_area_)) {
++    if (re_area_.search(art_, m)) {
+       c.area = true; c.A = fnum(m[1]); c.B = fnum(m[2]);
+       std::string rest = art_.substr(m.position(0) + m.length(0) - 2);
+-      std::smatch l;
+-      if (std::regex_search(rest, l, re_land_) && l.position(0) == 0) {
++      e12re::Match l;
++      if (re_land_.search(rest, l) && l.position(0) == 0) {
+         c.land = true; c.C = fnum(l[1]); c.Dm = fnum(l[2]); c.Ds = l[2];
+         std::string r2 = rest.substr(l.position(0) + l.length(0) - 14);
+-        std::smatch w;
+-        if (std::regex_search(r2, w, re_water_) && w.position(0) == 0) {
++        e12re::Match w;
++        if (re_water_.search(r2, w) && w.position(0) == 0) {
+           c.water = true; c.E = fnum(w[1]); c.Fw = fnum(w[2]); c.Fws = w[2];
+         }
+       }
+     }
+-    if (std::regex_search(art_, m, re_dens_)) { c.dens = true; c.X = fnum(m[1]); c.Y = fnum(m[2]); }
++    if (re_dens_.search(art_, m)) { c.dens = true; c.X = fnum(m[1]); c.Y = fnum(m[2]); }
+     return c;
+   }
+   // percentages of the current open sentence that starts with `head` and ends with `end` (not yet seen)
+@@ -474,9 +474,8 @@
+     size_t s = h + strlen(head);
+     if (art_.find(end, s) != std::string::npos) return false;
+     std::string sent = art_.substr(s);
+-    static const std::regex pct("([0-9]+\\.[0-9]+)%");
+-    for (auto it = std::sregex_iterator(sent.begin(), sent.end(), pct); it != std::sregex_iterator(); ++it)
+-      vals->push_back(fnum((*it)[1]));
++    static e12re::Re pct("([0-9]+\\.[0-9]+)%");
++    pct.each(sent, [&](const e12re::Match& pm) { vals->push_back(fnum(pm[1])); });
+     *lead = sent;
+     return true;
+   }
+@@ -486,7 +485,7 @@
+   }
+ 
+   void try_triggers() {
+-    std::smatch m;
++    e12re::Match m;
+     for (auto& t : trig_) {
+       if (!ends(art_, t.suffix.c_str())) continue;
+       if (!census_ && (t.id == T_HH_COPY || t.id == T_SEX || t.id == T_SEX18 || t.id == T_HISP || t.id == T_HHSIZE ||
+@@ -512,9 +511,9 @@
+           if (body.empty() || ends(art_, ", ") || ends(art_, "and ")) {
+             Census c = parse_census();
+             if (c.ppl && c.P > 0) {
+-              static const std::regex pct("([0-9]+\\.[0-9]+)%");
++              static e12re::Re pct("([0-9]+\\.[0-9]+)%");
+               double tot = 0; int n = 0;
+-              for (auto it = std::sregex_iterator(body.begin(), body.end(), pct); it != std::sregex_iterator(); ++it) { tot += fnum((*it)[1]); n++; }
++              pct.each(body, [&](const e12re::Match& pm) { tot += fnum(pm[1]); n++; });
+               if (ends(art_, "and ")) {
+                 double tgt = 100.0 - tot;
+                 CandMap mm;
+@@ -589,7 +588,7 @@
+     return d;
+   }
+ 
+-  void fire(int id, const std::smatch& m) {
++  void fire(int id, const e12re::Match& m) {
+     Census c = parse_census();
+     CandMap mm;
+     switch (id) {
+@@ -649,9 +648,9 @@
+       }
+       case T_HDENS_KM: case T_HDENS_MI: {
+         if (!c.ppl || !c.dens || c.P <= 0) return;
+-        std::smatch u;
++        e12re::Match u;
+         if (id == T_HDENS_KM) {
+-          static const std::regex hu("There (?:are|were) ([0-9][0-9,]*(?:\\.[0-9]+)?) housing units at an average density of $");
++          static e12re::Re hu("There (?:are|were) ([0-9][0-9,]*(?:\\.[0-9]+)?) housing units at an average density of $");
+           if (!tail_match(hu, u)) return;
+           double r = fnum(u[1]) / c.P;
+           if (range_list(mm, (c.X - 0.05) * r - 1e-9, (c.X + 0.05) * r + 1e-9, 1, "/", true)) open_slot(HDENS_KM, mm);
+@@ -700,10 +699,10 @@
+         std::vector<double> v; std::string s;
+         size_t h = art_.rfind("the population is spread out with ");
+         if (h == std::string::npos) return;
+-        static const std::regex u18("^([0-9]+\\.[0-9]+)%");
++        static e12re::Re u18("^([0-9]+\\.[0-9]+)%");
+         std::string after = art_.substr(h + 34);
+-        std::smatch um;
+-        if (!std::regex_search(after, um, u18)) return;
++        e12re::Match um;
++        if (!u18.search(after, um)) return;
+         double u = fnum(um[1]);
+         int64_t P = c.P;
+         std::vector<int64_t> ks;
+@@ -755,8 +754,8 @@
+       if (ns > 0 && (isdigit((unsigned char)a[ns - 1]) || a[ns - 1] == '.' || a[ns - 1] == ',')) continue;
+       std::string num = a.substr(ns, ne - ns);
+       // the number must be a full NUM token: digits/commas then optional .digits
+-      static const std::regex numre("^-?[0-9][0-9,]*(?:\\.[0-9]+)?$");
+-      if (!std::regex_match(num, numre)) continue;
++      static e12re::Re numre("^-?[0-9][0-9,]*(?:\\.[0-9]+)?$");
++      e12re::Match nm_; if (!numre.search(num, nm_)) continue;
+       double N = fnum(num);
+       bool commas = num.find(',') != std::string::npos;
+       CandMap d;

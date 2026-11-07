@@ -22,7 +22,15 @@ typedef unsigned char U8;
 #define TB 23
 #endif
 // TB: log2 slots per context table
-#define NCTX 12               // hashed contexts
+#ifndef NCTX
+#define NCTX 15               // hashed contexts
+#endif
+#ifndef APMW
+#define APMW 3
+#endif
+#ifndef APMR
+#define APMR 18
+#endif
 #ifndef WI
 #define WI ((1 << 16) / 4)
 #endif
@@ -88,6 +96,21 @@ static void byte_ctx(void) {
   h[9] = hsh(9, (c4 & 0xff00) | (pos & 3)); // byte 2 + alignment
   h[10] = hsh(10, c4 & 0x00ff00ff);
   h[11] = hsh(11, c2 | ((pos & 15) << 16));
+#if NCTX > 12
+  h[12] = hsh(12, (c8 & 0xff) | (c1 << 8));
+#endif
+#ifndef H13
+#define H13 ((c4 >> 8) & 0xffff)
+#endif
+#if NCTX > 13
+  h[13] = hsh(13, H13);
+#endif
+#ifndef H14
+#define H14 (c8 & 0xff00ffff)
+#endif
+#if NCTX > 14
+  h[14] = hsh(14, H14);
+#endif
 #ifdef SKIP
   h[SKIP] = SKIP;
 #endif
@@ -138,7 +161,7 @@ static int cm_predict(void) {
   apmi = ((c4 & 0xff) * 256 + c0) * 33 + (a >> 12);
   U16 *ap = &APM[0][0] + apmi;
   int pa = (ap[0] * (4096 - apmw) + ap[1] * apmw) >> 16;
-  pr = (squash(s) + 3 * pa) >> 2;
+  pr = (squash(s) * (4 - APMW) + APMW * pa) >> 2;
   if (pr < 1) pr = 1;
   if (pr > 4094) pr = 4094;
   return pr;
@@ -159,8 +182,8 @@ static void cm_update(int y) {
   for (int i = 0; i < NIN; i++) { w1[i] += (st[i] * e1) >> 10; w2[i] += (st[i] * e2) >> 10; }
   U16 *ap = &APM[0][0] + apmi;
   int g = (y << 16) + (y << 5) - y - y;
-  ap[0] += (g - ap[0]) * (4096 - apmw) >> 18;
-  ap[1] += (g - ap[1]) * apmw >> 18;
+  ap[0] += (g - ap[0]) * (4096 - apmw) >> APMR;
+  ap[1] += (g - ap[1]) * apmw >> APMR;
   if (mlen && (int)mbit != y) mlen = 0;
   c0 = c0 * 2 + y;
   bitn++;

@@ -1,0 +1,217 @@
+--- a/cpp_infer/src/weights_io_compressed.cpp
++++ b/cpp_infer/src/weights_io_compressed.cpp
+@@ -230,17 +230,18 @@
+     for (int i = 0; i < 4; i++) code = (code << 8) | byte();
+   }
+   uint8_t byte() { return p < end ? *p++ : 0; }
+-  int decode_bit(uint16_t* prob) {
+-    uint32_t bound = (range >> 11) * *prob;
++  // [sub100mil P1] pb/sh: probability bits and adaptation shift (v2: 11/5; v3's int4 tree: 16/9)
++  int decode_bit(uint16_t* prob, int pb = 11, int sh = 5) {
++    uint32_t bound = (range >> pb) * *prob;
+     int bit;
+     if (code < bound) {
+       range = bound;
+-      *prob = uint16_t(*prob + ((2048 - *prob) >> 5));
++      *prob = uint16_t(*prob + (((1u << pb) - *prob) >> sh));
+       bit = 0;
+     } else {
+       code -= bound;
+       range -= bound;
+-      *prob = uint16_t(*prob - (*prob >> 5));
++      *prob = uint16_t(*prob - (*prob >> sh));
+       bit = 1;
+     }
+     while (range < (1u << 24)) {
+@@ -250,9 +251,9 @@
+     return bit;
+   }
+   // probs: (1 << nbits) entries, indices 1.. used
+-  uint32_t decode_tree(uint16_t* probs, int nbits) {
++  uint32_t decode_tree(uint16_t* probs, int nbits, int pb = 11, int sh = 5) {
+     uint32_t node = 1;
+-    for (int k = 0; k < nbits; k++) node = (node << 1) | decode_bit(&probs[node]);
++    for (int k = 0; k < nbits; k++) node = (node << 1) | decode_bit(&probs[node], pb, sh);
+     return node - (1u << nbits);
+   }
+ };
+@@ -278,10 +279,12 @@
+         plane(4 * 256, 1024) {}
+ };
+ 
+-WeightsFile load_v2(Reader& r, const char* path) {
++WeightsFile load_v2(Reader& r, const char* path, bool v3 = false) {
+   uint32_t n_tensors = r.u32();
+   BinDecoder dec(r.p, r.left);
+   ModelsV2 m;
++  const int i4pb = v3 ? 16 : 11, i4sh = v3 ? 9 : 5;  // [sub100mil P1] FX2TFWC3: int4 tree 16-bit, shift 9
++  if (v3) m.int4.assign(16, uint16_t(1u << 15));
+ 
+   auto get_meta = [&]() -> uint8_t {
+     uint8_t b = uint8_t(dec.decode_tree(&m.meta[size_t(m.meta_prev) * 256], 8));
+@@ -326,7 +329,7 @@
+                                   name.c_str(), unsigned(t.dtype));
+         int8_t* out = reinterpret_cast<int8_t*>(t.data.data());
+         for (size_t k = 0; k < numel; k++)
+-          out[k] = int8_t(int(dec.decode_tree(m.int4.data(), 4)) - 7);
++          out[k] = int8_t(int(dec.decode_tree(m.int4.data(), 4, i4pb, i4sh)) - 7);
+         break;
+       }
+       case ENC_BF16: {
+@@ -400,6 +403,7 @@
+   char magic[8];
+   r.read(magic, 8);
+   if (std::memcmp(magic, "FX2TFWC2", 8) == 0) return load_v2(r, path);
++  if (std::memcmp(magic, "FX2TFWC3", 8) == 0) return load_v2(r, path, true);
+   if (std::memcmp(magic, "FX2TFWC1", 8) != 0) die("%s: bad magic", path);
+ 
+   uint32_t n_tensors = r.u32();
+--- a/pysrc/weights_compress.py
++++ b/pysrc/weights_compress.py
+@@ -190,6 +190,10 @@
+ # ---------------------------------------------------------------------------
+ 
+ MAGIC_V2 = b"FX2TFWC2"
++# [sub100mil P1] v3 = v2 except the int4 tree: 16-bit probabilities, shift 9 (slower adaptation:
++# the quantized weights are close to i.i.d., so this is ~27.8 KB smaller)
++MAGIC_V3 = b"FX2TFWC3"
++V3_INT4 = (16, 9)
+ 
+ # payload encodings (one byte per tensor in the v2 stream)
+ ENC_RAW = 0  # bytes through the order-0 raw model (fallback, any dtype)
+@@ -363,25 +367,25 @@
+         self.cache_size += 1
+         self.low = (self.low << 8) & _MASK32
+ 
+-    def encode_bit(self, probs: list, idx: int, bit: int) -> None:
++    def encode_bit(self, probs: list, idx: int, bit: int, pb: int = 11, sh: int = 5) -> None:
+         p = probs[idx]
+-        bound = (self.range >> 11) * p
++        bound = (self.range >> pb) * p
+         if bit == 0:
+             self.range = bound
+-            probs[idx] = p + ((2048 - p) >> 5)
++            probs[idx] = p + (((1 << pb) - p) >> sh)
+         else:
+             self.low += bound
+             self.range -= bound
+-            probs[idx] = p - (p >> 5)
++            probs[idx] = p - (p >> sh)
+         while self.range < _TOP:
+             self.range = self.range << 8
+             self._shift_low()
+ 
+-    def encode_tree(self, probs: list, nbits: int, symbol: int) -> None:
++    def encode_tree(self, probs: list, nbits: int, symbol: int, pb: int = 11, sh: int = 5) -> None:
+         node = 1
+         for k in range(nbits - 1, -1, -1):
+             bit = (symbol >> k) & 1
+-            self.encode_bit(probs, node, bit)
++            self.encode_bit(probs, node, bit, pb, sh)
+             node = (node << 1) | bit
+ 
+     def finish(self) -> bytes:
+@@ -404,27 +408,27 @@
+         self.pos += 1
+         return b
+ 
+-    def decode_bit(self, probs: list, idx: int) -> int:
++    def decode_bit(self, probs: list, idx: int, pb: int = 11, sh: int = 5) -> int:
+         p = probs[idx]
+-        bound = (self.range >> 11) * p
++        bound = (self.range >> pb) * p
+         if self.code < bound:
+             self.range = bound
+-            probs[idx] = p + ((2048 - p) >> 5)
++            probs[idx] = p + (((1 << pb) - p) >> sh)
+             bit = 0
+         else:
+             self.code -= bound
+             self.range -= bound
+-            probs[idx] = p - (p >> 5)
++            probs[idx] = p - (p >> sh)
+             bit = 1
+         while self.range < _TOP:
+             self.code = ((self.code << 8) | self._byte()) & _MASK32
+             self.range = self.range << 8
+         return bit
+ 
+-    def decode_tree(self, probs: list, nbits: int) -> int:
++    def decode_tree(self, probs: list, nbits: int, pb: int = 11, sh: int = 5) -> int:
+         node = 1
+         for _ in range(nbits):
+-            node = (node << 1) | self.decode_bit(probs, node)
++            node = (node << 1) | self.decode_bit(probs, node, pb, sh)
+         return node - (1 << nbits)
+ 
+ 
+@@ -496,11 +500,13 @@
+ 
+ 
+ def write_tensor_file_v2(
+-    filename: str, entries: list[tuple[str, int, np.ndarray]]
++    filename: str, entries: list[tuple[str, int, np.ndarray]], v3: bool = False
+ ) -> None:
+     """compressed alternative to export_weights.write_tensor_file (format v2)"""
+     enc = BinEncoder()
+     models = _Models()
++    if v3:
++        models.int4 = [1 << (V3_INT4[0] - 1)] * 16
+ 
+     def put_meta(b: int) -> None:
+         enc.encode_tree(models.meta_tree(), 8, b)
+@@ -530,8 +536,9 @@
+ 
+         if encoding == ENC_INT4:
+             probs = models.int4
++            pb, sh = V3_INT4 if v3 else (11, 5)
+             for v in (data.astype(np.int32).ravel() + 7).tolist():
+-                enc.encode_tree(probs, 4, v)
++                enc.encode_tree(probs, 4, v, pb, sh)
+         elif encoding == ENC_BF16:
+             for v in data.reshape(-1).tolist():
+                 hi = v >> 8
+@@ -554,17 +561,21 @@
+             seen[name] = data
+ 
+     with open(filename, "wb") as f:
+-        f.write(MAGIC_V2)
++        f.write(MAGIC_V3 if v3 else MAGIC_V2)
+         f.write(struct.pack("<I", len(entries)))
+         f.write(enc.finish())
+ 
+ 
+ def read_tensor_file_v2(filename: str) -> dict[str, tuple[int, np.ndarray]]:
+     with open(filename, "rb") as f:
+-        assert f.read(8) == MAGIC_V2
++        magic = f.read(8)
++        assert magic in (MAGIC_V2, MAGIC_V3)
++        v3 = magic == MAGIC_V3
+         (n_tensors,) = struct.unpack("<I", f.read(4))
+         dec = BinDecoder(f.read())
+     models = _Models()
++    if v3:
++        models.int4 = [1 << (V3_INT4[0] - 1)] * 16
+ 
+     def get_meta() -> int:
+         b = dec.decode_tree(models.meta_tree(), 8)
+@@ -597,8 +608,9 @@
+         if encoding == ENC_INT4:
+             assert dtype_code == DTYPE_INT8
+             probs = models.int4
++            pb, sh = V3_INT4 if v3 else (11, 5)
+             array = np.array(
+-                [dec.decode_tree(probs, 4) - 7 for _ in range(count)],
++                [dec.decode_tree(probs, 4, pb, sh) - 7 for _ in range(count)],
+                 dtype=np.int8,
+             ).reshape(shape)
+         elif encoding == ENC_BF16:
+@@ -662,7 +674,7 @@
+         magic = f.read(8)
+     if magic == MAGIC_V1:
+         return read_tensor_file_v1(filename)
+-    if magic == MAGIC_V2:
++    if magic in (MAGIC_V2, MAGIC_V3):
+         return read_tensor_file_v2(filename)
+     raise ValueError(f"{filename}: unknown magic {magic!r}")
+ 
