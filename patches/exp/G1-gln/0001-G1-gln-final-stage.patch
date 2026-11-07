@@ -23,7 +23,7 @@ index f49f9a5..833dc17 100644
        (((x2_ - x1_) & 0xffff) * p >> 16);
    if (bit) {
 diff --git a/src/predictor.cpp b/src/predictor.cpp
-index 77c5b09..6a899ff 100644
+index 77c5b09..1f805a3 100644
 --- a/src/predictor.cpp
 +++ b/src/predictor.cpp
 @@ -258,6 +258,21 @@ Predictor::Predictor(const std::vector<bool>& vocab,
@@ -67,7 +67,7 @@ index 77c5b09..6a899ff 100644
 +  float X[g1::KX], Z[g1::ZD];
 +  g1::Features(&layers_[1].Inputs()[0], (int)mixer_0_.size(), bitl_m1raw_, g1_psse_,
 +               g1::Stretch(q / 65536.0f), (int)e1_cb_, X, Z);
-+  const float p = g1::Squash(g1_->Predict(X, Z));
++  const float p = g1_->Squash(g1_->Predict(X, Z));
 +  unsigned int q2 = (unsigned int)(1.0f + 65534.0f * p);
 +  if (q2 < 1) q2 = 1;
 +  if (q2 > 65535) q2 = 65535;

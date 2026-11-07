@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
       int bit = bb[0]; unsigned q = (unsigned)(fl[n + 3] * 65536.0f + 0.5f), q2 = q;
       if (!bb[1]) {
         g1::Features(fl, n - 3, fl[n], fl[n + 1], g1::Stretch(q / 65536.0f), bb[5], X, Z);
-        float p = g1::Squash(g.Predict(X, Z));
+        float p = g.Squash(g.Predict(X, Z));
         q2 = (unsigned)(1.0f + 65534.0f * p); if (q2 < 1) q2 = 1; if (q2 > 65535) q2 = 65535;
         g.Update(bit);
       }
