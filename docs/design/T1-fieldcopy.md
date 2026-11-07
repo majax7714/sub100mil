@@ -21,13 +21,13 @@ Classification: **model addition (non-transformer specialist, final stage)**. La
 | Step | Script |
 |---|---|
 | In-article laws: instances, law holds, record bits on the derivable bytes | `scripts/analysis/t1_survey.py` |
-| Census categories (lead link / "type in STATE") | `build/exp/T1/census_cat.py` (one-off) |
+| Census categories (lead link / "type in STATE") | `scripts/analysis/t1_census_cat.py` |
 | Interlanguage titles vs the English title, by class, with the decoder-valid group mapping | `scripts/analysis/t1_iw.py` |
 | Offline slots and per-bit sim (E12/X2 method) | `scripts/analysis/t1_slots.py`, `scripts/analysis/t1_sim.cpp` |
 | Causal re-run of the real header on cost dumps; full-stream counts and time (`stream=1`) | `scripts/analysis/t1_csim.cpp` |
 | Reordered interwiki proxies (pages with interlanguage tails, text stubbed, full-run order) | `scripts/analysis/t1_proxy.py` |
 | Full-run per-language rates before a proxy (warm seed) | `scripts/analysis/t1_seed.py` |
-| Per-rank-bin counts in the full run's order; projection | `build/exp/T1/rank_bins.py`, `scripts/analysis/t1_project.py` |
+| Per-rank-bin counts in the full run's order; projection | `scripts/analysis/t1_rank_bins.py`, `scripts/analysis/t1_project.py` |
 
 ```sh
 D=build/refs/fx2-cmix-transformer-v1/tree/dictionary/english.dic; T=build/exp/T1; R=build/refs/fx2-cmix-transformer-v1
@@ -40,10 +40,10 @@ python3 -P -E scripts/analysis/t1_slots.py --pre build/exp/E2/proxy/10M.pre --co
 g++ -O2 -march=x86-64-v3 -o $T/t1_sim scripts/analysis/t1_sim.cpp && $T/t1_sim build/exp/A1/runs/cost_10M.bin $T/slots_10M_np.bin lr=0.004
 g++ -O2 -march=x86-64-v3 -std=c++17 -I patches/exp/T1-fieldcopy -o $T/t1_csim scripts/analysis/t1_csim.cpp
 $T/t1_csim build/exp/A1/runs/cost_10M.bin $D;  $T/t1_csim build/exp/A1/full/full.stream $D stream=1
-python3 -P -E build/exp/T1/check_proxy.py build/exp/E2/proxy/10M.pre        # writes build/exp/T1/full_groups.pkl once
+python3 -P -E scripts/analysis/t1_check_proxy.py build/exp/E2/proxy/10M.pre        # writes build/exp/T1/full_groups.pkl once
 python3 -P -E scripts/analysis/t1_proxy.py --ctx 3 --ranks 120000:170000 --meta build/exp/X2/meta_pages.tsv --out $T/iwp_120k.xml
 $R/slicetool pre $T/iwp_120k.xml $T/iwp_120k.pre                               # (+ slicetool post | cmp, check_proxy.py)
-build/exp/T1/run_costlogs.sh 120k                                              # cost-logged record run, fast lane
+scripts/analysis/t1_costlogs.sh 120k                                             # cost-logged record run, fast lane
 python3 -P -E scripts/analysis/t1_seed.py --rank 120000 --meta build/exp/X2/meta_pages.tsv --out $T/seed_120k.txt
 $T/t1_csim $T/run_120k/cost_iwp_120k.bin $D seed=$T/seed_120k.txt > $T/csim_warm_120k.txt
 python3 -P -E scripts/analysis/t1_project.py --bins $T/rank_bins.tsv --point $T/iwp_5k.pre:$T/csim_warm_5k.txt ...
@@ -147,7 +147,7 @@ Slices hold only the first articles' groups, in identity order, and few eqT link
 block, `t1_proxy.py` writes enwik9's intro plus, in the full run's page order (`meta_pages.tsv`), the pages of a
 rank window that own a group, each with its text replaced by `'''T'''` plus the original lines from 3 non-blank
 lines above the interlanguage tail to the end (with a bare stub phda9 moves only part of the tail; 3 lines make
-every group identical to the full run's: `check_proxy.py` compares each against `full.pre`'s). So the block is the
+every group identical to the full run's: `t1_check_proxy.py` compares each against `full.pre`'s). So the block is the
 full run's block for that window, with the full run's local neighbours. All proxies round-trip through slicetool.
 The record's cost log (`cmix_costlog`, observation only, fast lane, about 3 min) then gives its cost on that block.
 
