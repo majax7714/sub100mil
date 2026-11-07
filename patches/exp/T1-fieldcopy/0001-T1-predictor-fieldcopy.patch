@@ -1,0 +1,56 @@
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 77c5b09..21071ca 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -258,6 +258,14 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+       fprintf(stderr, "X2: metadata time law on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
+     }
+   }
++  if (const char* d = getenv("T1_DICT")) {
++    if (*d && !options.ppmd_only && !options.transformer_only) {
++      const char* lr = getenv("T1_LR");
++      t1_ = std::make_unique<t1::FieldCopyMix>(d, options.e12_coded_block_header, lr && *lr ? atof(lr) : 0.004);
++      if (!t1_->spec.ok) { fprintf(stderr, "T1: cannot read dictionary %s\n", d); exit(1); }
++      fprintf(stderr, "T1: interlanguage field copy on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -686,6 +694,7 @@ float Predictor::Predict() {
+ #endif
+   if (e12_) p = e12_->Predict(p);  // [E12] final stage after SSE (and E1's APM)
+   if (x2_) p = x2_->Predict(p);  // [X2] metadata time law, final stage after E12
++  if (t1_) p = t1_->Predict(p);  // [T1] interlanguage title = English title, final stage after X2
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -909,6 +918,7 @@ void Predictor::Perceive(int bit) {
+   }
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
++  if (t1_) t1_->Update(bit);  // [T1]
+   {
+   PROF(CMO);
+   bracket_model_->Perceive(bit);
+diff --git a/src/predictor.h b/src/predictor.h
+index a351085..574d3ec 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -18,6 +18,7 @@
+ #include "models/fxcmv1.h"
+ #include "models/e12_arith.h"
+ #include "models/x2_timelaw.h"
++#include "models/t1_fieldcopy.h"
+ #include "mixer/lstm.h"
+ #include "contexts/context-hash.h"
+ #include "contexts/bracket-context.h"
+@@ -245,6 +246,8 @@ class Predictor {
+   std::unique_ptr<e12::E12Mix> e12_;
+   // X2 metadata-block time law + redirect page-id law (final stage after E12); on when X2_DICT names english.dic.
+   std::unique_ptr<x2::TimeLawMix> x2_;
++  // T1 interlanguage title = English title (final stage after X2); on when T1_DICT names english.dic.
++  std::unique_ptr<t1::FieldCopyMix> t1_;
+   int byte_to_index_[256];
+   std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
+   std::vector<float> transformer_probs_; // the transformer's output row
