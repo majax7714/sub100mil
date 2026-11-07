@@ -26,6 +26,14 @@ patches/exp/C2-combo/run.sh v1 enwik9_10M "first C2 run"
 BENCH_TMP=$PWD/build/exp/C2/benchtmp patches/exp/C2-combo/run.sh v1 enwik9_100M "100M check"
 ```
 
-## Results
+## Results (all round-trip byte-exact; ledger rows `fx2T+C2-v1`)
 
-See the ledger rows `fx2T+C2-*` and the E12 design doc (docs/design/E12-arith-consistency.md).
+| slice | record | reference | C2 |
+|---|---:|---:|---:|
+| enwik9_10M | 1,264,682 | C1 lr05 1,261,970 | **1,261,828** (−142 vs C1 lr05, −2,854 vs record) |
+| enwik9_mid10M_pa | 337,982 | E12 lr0.004 324,627 | **323,802** (−14,180 vs record, −4.20%) |
+| enwik9_100M | 12,006,323 | E2 alone 11,988,349 | **11,980,914** (−25,409 vs record, −0.212%) |
+
+100M: comp 18,513 s, decomp 12,207 s (contended main lane), peak RSS 6,577.5 MiB (E2-alone 100M row 6,557.2).
+Full-enwik9 cost on the reference machine [ESTIMATE]: record 37.2 h + C1's ≈3.1 h + E12 ≈0.2 h ≈ 40.5 h per
+direction (target 45 h); RAM +≈20 MiB over the record (C1 +13 MiB, E12 a few MB) on the record's ≈9.66 GB.
