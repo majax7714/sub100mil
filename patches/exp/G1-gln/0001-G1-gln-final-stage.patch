@@ -1,0 +1,120 @@
+diff --git a/src/coder/decoder.cpp b/src/coder/decoder.cpp
+index 170ade5..becaae8 100644
+--- a/src/coder/decoder.cpp
++++ b/src/coder/decoder.cpp
+@@ -23,6 +23,7 @@ int Decoder::Decode() {
+   const bool bitl = p_->BitlPost();
+   if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
+                                  p_->bitl_m1raw_, p_->bitl_override_);
++  p = p_->G1Adjust(p);  // [sub100mil G1]
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   int bit = 0;
+diff --git a/src/coder/encoder.cpp b/src/coder/encoder.cpp
+index f49f9a5..833dc17 100644
+--- a/src/coder/encoder.cpp
++++ b/src/coder/encoder.cpp
+@@ -17,6 +17,7 @@ void Encoder::Encode(int bit) {
+   const bool bitl = p_->BitlPost();
+   if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
+                                  p_->bitl_m1raw_, p_->bitl_override_);
++  p = p_->G1Adjust(p);  // [sub100mil G1]
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   if (bit) {
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 77c5b09..6a899ff 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -258,6 +258,21 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+       fprintf(stderr, "X2: metadata time law on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
+     }
+   }
++  if (const char* d = getenv("G1_GLN")) {  // [G1] GLN final stage; G1_N/K/LR/LRMIN/BSCALE/SEED/TAU override
++    if (*d && *d != '0' && !options.ppmd_only && !options.transformer_only) {
++      g1::Config gc;
++      if (const char* v = getenv("G1_N")) gc.n = atoi(v);
++      if (const char* v = getenv("G1_K")) gc.k = atoi(v);
++      if (const char* v = getenv("G1_LR")) gc.lr = atof(v);
++      if (const char* v = getenv("G1_LRMIN")) gc.lrmin = atof(v);
++      if (const char* v = getenv("G1_BSCALE")) gc.bscale = atof(v);
++      if (const char* v = getenv("G1_SEED")) gc.seed = atoi(v);
++      if (const char* v = getenv("G1_TAU")) gc.tau = atof(v);
++      g1_ = std::make_unique<g1::Gln>(gc);
++      fprintf(stderr, "G1: GLN final stage on (n %d k %d lr %g lrmin %g bscale %g seed %d tau %g)\n",
++              gc.n, gc.k, gc.lr, gc.lrmin, gc.bscale, gc.seed, gc.tau);
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -672,6 +687,7 @@ float Predictor::Predict() {
+   p = Sigmoid::Logistic(bitl_m1raw_);
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
++  g1_psse_ = p;  // [G1]
+ #ifdef E1_APM
+   {
+ #if E1_APM == 2
+@@ -692,6 +708,21 @@ float Predictor::Predict() {
+   return p;
+ }
+ 
++// [G1] GLN final stage on the coder's probability (after the BITLSTM head). Skipped on override bits.
++unsigned int Predictor::G1Adjust(unsigned int q) {
++  g1_active_ = false;
++  if (!g1_ || bitl_override_) return q;
++  float X[g1::KX], Z[g1::ZD];
++  g1::Features(&layers_[1].Inputs()[0], (int)mixer_0_.size(), bitl_m1raw_, g1_psse_,
++               g1::Stretch(q / 65536.0f), (int)e1_cb_, X, Z);
++  const float p = g1::Squash(g1_->Predict(X, Z));
++  unsigned int q2 = (unsigned int)(1.0f + 65534.0f * p);
++  if (q2 < 1) q2 = 1;
++  if (q2 > 65535) q2 = 65535;
++  g1_active_ = true;
++  return q2;
++}
++
+ void Predictor::WritePpmdProbs() {
+   const std::valarray<float>& p = byte_model_->BytePredict();
+   for (unsigned int i = 0; i < vocab_size_; ++i) {
+@@ -907,6 +938,7 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  if (g1_active_) g1_->Update(bit);  // [G1]
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
+   {
+diff --git a/src/predictor.h b/src/predictor.h
+index a351085..48335b8 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -18,6 +18,7 @@
+ #include "models/fxcmv1.h"
+ #include "models/e12_arith.h"
+ #include "models/x2_timelaw.h"
++#include "models/g1_gln.h"
+ #include "mixer/lstm.h"
+ #include "contexts/context-hash.h"
+ #include "contexts/bracket-context.h"
+@@ -184,6 +185,9 @@ class Predictor {
+   int bitl_n_stage1_ = 0;
+   float bitl_m1raw_ = 0.0f;
+   int bitl_override_ = 0;
++  // [sub100mil G1] GLN final stage after the BITLSTM head: the coder passes its 16-bit
++  // probability through this between Predict() and Perceive().
++  unsigned int G1Adjust(unsigned int q);
+ 
+  private:
+   unsigned long long GetNumModels();
+@@ -245,6 +249,9 @@ class Predictor {
+   std::unique_ptr<e12::E12Mix> e12_;
+   // X2 metadata-block time law + redirect page-id law (final stage after E12); on when X2_DICT names english.dic.
+   std::unique_ptr<x2::TimeLawMix> x2_;
++  std::unique_ptr<g1::Gln> g1_;  // [G1]
++  bool g1_active_ = false;
++  float g1_psse_ = 0;
+   int byte_to_index_[256];
+   std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
+   std::vector<float> transformer_probs_; // the transformer's output row

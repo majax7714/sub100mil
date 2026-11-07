@@ -1,0 +1,99 @@
+diff --git a/src/coder/encoder.cpp b/src/coder/encoder.cpp
+index f49f9a5..6c6b435 100644
+--- a/src/coder/encoder.cpp
++++ b/src/coder/encoder.cpp
+@@ -25,6 +25,7 @@ void Encoder::Encode(int bit) {
+     x1_ = xmid + 1;
+   }
+   if (bitl) bit_head::Observe(bit);
++  p_->g1_coded_q_ = p;
+   p_->Perceive(bit);
+ 
+   while (((x1_^x2_) & 0xff000000) == 0) {
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 77c5b09..88164ec 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -258,6 +258,12 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+       fprintf(stderr, "X2: metadata time law on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
+     }
+   }
++  if (const char* d = getenv("G1_DUMP")) {
++    if (*d && !options.ppmd_only && !options.transformer_only) {
++      g1_dump_ = fopen(d, "wb");
++      if (!g1_dump_) { fprintf(stderr, "G1: cannot open %s\n", d); exit(1); }
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -672,6 +678,7 @@ float Predictor::Predict() {
+   p = Sigmoid::Logistic(bitl_m1raw_);
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
++  g1_psse_ = p;
+ #ifdef E1_APM
+   {
+ #if E1_APM == 2
+@@ -686,6 +693,24 @@ float Predictor::Predict() {
+ #endif
+   if (e12_) p = e12_->Predict(p);  // [E12] final stage after SSE (and E1's APM)
+   if (x2_) p = x2_->Predict(p);  // [X2] metadata time law, final stage after E12
++  if (g1_dump_) {
++    const auto& in1 = layers_[1].Inputs();
++    unsigned int n = in1.size();
++    if (g1_rec_.empty()) {
++      g1_rec_.resize(n + 4);
++      fwrite("G1DUMP\0\0", 1, 8, g1_dump_);
++      uint32_t hn = n; fwrite(&hn, 4, 1, g1_dump_);
++    }
++    for (unsigned int i = 0; i < n; ++i) g1_rec_[i] = in1[i];
++    g1_rec_[n] = bitl_m1raw_; g1_rec_[n + 1] = g1_psse_; g1_rec_[n + 2] = p;
++    g1_b_[1] = byte_mixer_override >= 0 ? (byte_mixer_override > 0.5f ? 3 : 1) : 0;
++    g1_b_[2] = (unsigned char)manager_.bit_context_;
++    g1_b_[3] = (unsigned char)manager_.recent_bytes_[0];
++    g1_b_[4] = (unsigned char)manager_.recent_bytes_[1];
++#ifdef E1CONF
++    g1_b_[5] = (unsigned char)e1_cb_; g1_b_[6] = (unsigned char)e1_bb_; g1_b_[7] = (unsigned char)e1_ctx_;
++#endif
++  }
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+@@ -907,6 +932,12 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  if (g1_dump_ && !g1_rec_.empty()) {
++    g1_b_[0] = bit;
++    g1_rec_[g1_rec_.size() - 1] = g1_coded_q_ / 65536.0f;
++    fwrite(g1_rec_.data(), 4, g1_rec_.size(), g1_dump_);
++    fwrite(g1_b_, 1, 8, g1_dump_);
++  }
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
+   {
+diff --git a/src/predictor.h b/src/predictor.h
+index a351085..388c623 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -184,6 +184,7 @@ class Predictor {
+   int bitl_n_stage1_ = 0;
+   float bitl_m1raw_ = 0.0f;
+   int bitl_override_ = 0;
++  unsigned int g1_coded_q_ = 0;  // [G1 dump] the coder's final 16-bit probability
+ 
+  private:
+   unsigned long long GetNumModels();
+@@ -245,6 +246,11 @@ class Predictor {
+   std::unique_ptr<e12::E12Mix> e12_;
+   // X2 metadata-block time law + redirect page-id law (final stage after E12); on when X2_DICT names english.dic.
+   std::unique_ptr<x2::TimeLawMix> x2_;
++  // [G1 dump] per-bit final-stage record (observation only)
++  FILE* g1_dump_ = nullptr;
++  std::vector<float> g1_rec_;
++  unsigned char g1_b_[8] = {0};
++  float g1_psse_ = 0;
+   int byte_to_index_[256];
+   std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
+   std::vector<float> transformer_probs_; // the transformer's output row
