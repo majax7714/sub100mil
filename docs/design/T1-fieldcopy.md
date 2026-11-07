@@ -10,7 +10,7 @@ nor the CM knows which article a group belongs to. But the mapping is decoder-va
 `</text>` owns the k-th group**), and in 48,820 links (52% of the 93,700 groups) the title is the English title
 itself. A causal final stage that offers the title's coded bytes as a candidate gains **−580 B on enwik9_10M
 (1,261,700 → 1,261,120, −0.046%)** and **−1,059 B (−3.13%) on a reordered interwiki proxy**, both round-trip
-verified and matching the causal sim within 6 B. **Full enwik9 ESTIMATE about 70 KB, range 45–100 KB**, for under
+verified and matching the causal sim within 6 B. **Full enwik9 ESTIMATE about 72 KB, range 48–90 KB**, for under
 0.01 h of CPU, 19 MB of RAM and about 16 KB of unpacked binary.
 
 Classification: **model addition (non-transformer specialist, final stage)**. Labels: **[M]** measured here,
@@ -162,7 +162,7 @@ detector; full enwik9 is one text block, so the real run is unaffected). The win
 | 45K window (46,285) | 1,609 | 995 | 11.99 | −1,479 B | −1,471 B | 1.48 B |
 | 120K window (124,620) | 1,902 | 992 | 4.83 | −1,065 B | −1,096 B | 1.10 B |
 | 155K window (165,564) | 1,730 | 762 | 12.74 | −1,147 B | −1,175 B | 1.54 B |
-| 85K window (20 lines) | 339 | | | pending | | |
+| 85K window, 20 lines (85,263) | 339 | 100 | 12.29 | −152 B | −161 B | 1.61 B |
 | enwik9_10M (identity order, for comparison) | 747 | 470 | 13.10 | −586 B | | 1.25 B |
 
 "Warm-seeded" pre-loads each language's T-link counts from all earlier groups of the full run (`t1_seed.py`); it
@@ -187,13 +187,13 @@ per 10K-rank bin (`rank_bins.tsv`; 93,700 groups, 48,820 eqT links, all before r
 
 | normaliser | projected gain |
 |---|---:|
-| per eqT link (the law's direct target) | **67.9 KB** |
-| per group | 81.5 KB |
-| per eqT + lcpT4 link (prefix gains too) | 102.7 KB |
+| per eqT link (the law's direct target) | **72.0 KB** |
+| per group | 74.1 KB |
+| per eqT + lcpT4 link (prefix gains too) | 85.4 KB |
 | (cold 10M per-class gains × full per-class slot counts, `t1_csim stream=1`) | (61.8 KB) |
 
-**About 70 KB, range 45–100 KB.** The point uses the eqT normaliser (the gain sits on eqT links in every proxy);
-the high end is the prefix-inclusive normaliser. The low end divides by 1.5 for the full run's warm CM, as X2 did:
+**About 72 KB, range 48–90 KB.** The point uses the eqT normaliser (the gain sits on eqT links in every proxy);
+the high end is the prefix-inclusive normaliser. The low end divides the point by 1.5 for the full run's warm CM, as X2 did:
 the proxies are cold, and a full run's match models have 900 MB of history in which an English title's later
 bytes may already be predicted once its first bytes are coded (the 120K window, where the record pays 4.8 bits per
 eqT link instead of 12, shows the gain survives a cheaper record: 1.10 B per eqT link). Above the 30 KB bar either way.
