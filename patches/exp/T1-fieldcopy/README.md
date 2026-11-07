@@ -45,10 +45,11 @@ compile-time default reading the embedded dictionary, as for E12/X2.
 |---|---:|---:|---:|---:|
 | `enwik9_10M` | 1,261,700 | **1,261,120** | **−580 B (−0.046%)** | −586 B |
 | interwiki proxy `build/exp/T1/iwp_120k.xml` (reordered ranks 120K+, 1,902 groups) | 33,864 | **32,805** | **−1,059 B (−3.13%)** | −1,065 B |
-| `enwik9_1M` | 126,244 | see the design doc | | −10 B |
+| `enwik9_1M` | 126,244 | **126,234** | **−10 B** | −10 B |
 
 The 10M row was built from `af861bf` (header before the group-end fix in `ec64749`; the fix changes nothing on
-10M: same slots, same −586 B in the csim); the proxy row from `ec64749` (`build/exp/T1/bin2/cmix`).
+10M: same slots, same −586 B in the csim); the proxy and 1M rows from `ec64749` (`build/exp/T1/bin2/cmix`).
+Full-enwik9 projection from five reordered interwiki proxies: **about 72 KB, range 48–90 KB [ESTIMATE]**.
 
 Cost: 0.04 µs per coded byte for the model over the whole 586 MB stream (24 s, `t1_csim stream=1`), plus the
 mixer inside the ~679K slots (about 4.5M bytes): well under 0.01 h. RAM: 19 MB peak for the model on the full

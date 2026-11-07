@@ -175,7 +175,7 @@ changes little because the rates settle within a few hundred groups.
 |---|---:|---:|---:|---:|
 | enwik9_10M | 1,261,700 | **1,261,120** | **−580 B (−0.046%)** | −586 B |
 | interwiki proxy, 120K window (`iwp_120k.xml`, 999,900 B) | 33,864 | **32,805** | **−1,059 B (−3.13%)** | −1,065 B |
-| enwik9_1M | 126,244 | pending | | −10 B |
+| enwik9_1M (37 groups) | 126,244 | **126,234** | **−10 B** | −10 B |
 
 Real = sim within 6 B (the sim runs on the record's costs, the build on C3's, whose E12/X2 stages don't touch the
 block). C3's other stages and T1 don't overlap: T1's slots are all inside the interwiki block.
