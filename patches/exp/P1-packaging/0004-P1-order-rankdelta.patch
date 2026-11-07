@@ -1,0 +1,23 @@
+--- a/src/readalike_prepr/article_reorder.h
++++ b/src/readalike_prepr/article_reorder.h
+@@ -2,6 +2,7 @@
+ #define ARTICLE_REORDER_H 
+ 
+ 
++#include "order_rankdelta.h"
+ #include <string.h>
+ #include <string>
+ #include <vector>
+@@ -125,9 +126,10 @@
+       }
+     }
+ 
++    // [sub100mil P1] the order is stored as rank deltas (order_rankdelta.h), about 19 KB smaller once CM-coded
+     std::ifstream infile2(".new_article_order");
+-    while (getline(infile2, line)) {
+-      int res = remap[stoi(line)];  // Article numbers get remapped.
++    for (int id : DecodeRankDeltaOrder(infile2)) {
++      int res = remap[id];  // Article numbers get remapped.
+       positions.push_back(res);
+       used[res] = 1;
+     }

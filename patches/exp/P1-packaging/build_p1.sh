@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # [P1] C3 + all P1 code-size changes (patches/exp/P1-packaging): E12 without std::regex, FX2TFWC3 weight decoder,
-# bit_head at -O2, no unwind tables in the CM objects. Otherwise C3-combo/build.sh verbatim. Output: build/exp/P1/c3p1/bin/cmix (P1_OUT overrides c3p1).
+# bit_head at -O2, no unwind tables in the CM objects, rank-delta article order ($E/new_article_order.rd is the
+# order file to CM-code into comp9 instead of src/readalike_prepr/data/new_article_order). Otherwise C3-combo/build.sh verbatim. Output: build/exp/P1/c3p1/bin/cmix (P1_OUT overrides c3p1).
 # The archive must be bit-identical to C3's; the weights file to embed is made by mk_tfwc3.sh.
 # C3 = C2 (C1 + E2 logit LR x0.5 + E12) + X2 metadata time law (final stage after E12), one build on
 # fx2-cmix-transformer-v1. Steps 1-8 are C2's (patches/exp/C2-combo/build.sh); 9-10 add X2. E2's LR x0.5 is a runtime setting (run.sh). Tree build/exp/C2/tree = pinned third_party
@@ -49,6 +50,10 @@ cp "$P"/exp/P1-packaging/e12_re.h src/models/e12_re.h
 git apply "$P"/exp/P1-packaging/0001-P1-e12-no-regex.patch
 # [P1] FX2TFWC3 weights (int4 tree 16-bit probs, shift 9): decoder + encoder; decodes to the same tensors
 git apply "$P"/exp/P1-packaging/0002-P1-tfwc3-weights.patch
+# [P1] article order stored as rank deltas (comp9 only; the archive does not change): reader + its decoder
+cp "$P"/exp/P1-packaging/order_rankdelta.h src/readalike_prepr/order_rankdelta.h
+git apply "$P"/exp/P1-packaging/0004-P1-order-rankdelta.patch
+python3 "$P"/exp/P1-packaging/order_rankdelta.py src/readalike_prepr/data/new_article_order "$E/new_article_order.rd"
 # [P1, experimental, P1_OS=1] E12 and X2 namespaces at -Os (#pragma GCC optimize); must be re-verified bit-exact
 if [[ "${P1_OS-}" == 1 ]]; then git apply "$P"/exp/P1-packaging/0003-P1-e12-x2-Os.patch; fi
 # [P1] E3's bit_head at -O2 instead of -O3 (value-safe FP: no fast-math, -ffp-contract=off, so the results
