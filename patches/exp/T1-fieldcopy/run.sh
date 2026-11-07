@@ -6,7 +6,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"; cd "$REPO"
 V=$1; S=$2; N=$3; LANE=(); [[ "${4-}" == --fast ]] && LANE=(--fast)
-export FX2_BIN="$REPO/build/exp/T1/bin/cmix"
+export FX2_BIN="${FX2_BIN-$REPO/build/exp/T1/bin/cmix}"
 export E2_LOGIT="${E2_LOGIT-1}" BITL_LR_E6="${BITL_LR_E6-3000}" BITL_ACCUM="${BITL_ACCUM-1}"
 export E2_A0="${E2_A0-0.25}" E2_AF="${E2_AF-0.05}"
 export E12_DICT="${E12_DICT-$REPO/build/refs/fx2-cmix-transformer-v1/tree/dictionary/english.dic}" E12_LR="${E12_LR-0.004}"

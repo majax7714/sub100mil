@@ -4,6 +4,8 @@
 //
 //   g++ -O2 -march=x86-64-v3 -std=c++17 -I patches/exp/T1-fieldcopy -o build/exp/T1/t1_csim scripts/analysis/t1_csim.cpp
 //   build/exp/T1/t1_csim COSTLOG english.dic [lr=0.004] [seed=SEED.txt]   (seed: t1_seed.py)
+//   build/exp/T1/t1_csim STREAM english.dic stream=1            (raw coded stream: counts and model time only)
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -24,6 +26,23 @@ int main(int argc, char** argv) {
   for (int i = 3; i < argc; i++) {
     if (!strncmp(argv[i], "lr=", 3)) lr = atof(argv[i] + 3);
     if (!strncmp(argv[i], "seed=", 5)) seed = argv[i] + 5;
+  }
+  int stream = 0;
+  for (int i = 3; i < argc; i++) if (!strncmp(argv[i], "stream=", 7)) stream = atoi(argv[i] + 7);
+  if (stream) {  // raw coded stream (no costs): count titles/groups/slots and time the model alone
+    FILE* sf = fopen(argv[1], "rb");
+    std::unique_ptr<t1::FieldCopy> sp(new t1::FieldCopy(argv[2], false));
+    std::vector<unsigned char> buf(1 << 20);
+    size_t r, tot = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    while ((r = fread(buf.data(), 1, buf.size(), sf)) > 0) {
+      for (size_t i = 0; i < r; i++) for (int b = 7; b >= 0; b--) { int c; sp->InSlot(&c); sp->Bit((buf[i] >> b) & 1); }
+      tot += r;
+    }
+    double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    printf("stream %zu B: titles queued %ld, groups %ld, slots %ld, title links %ld; %.1f s (%.3f us/B)\n", tot,
+           sp->titles_queued, sp->groups_seen, sp->slots_opened, sp->eq_links, s, 1e6 * s / tot);
+    return 0;
   }
   std::ifstream f(argv[1], std::ios::binary);
   f.seekg(0, std::ios::end); size_t sz = f.tellg(); f.seekg(16);

@@ -19,7 +19,7 @@
 #  11. patches/exp/T1-fieldcopy/0001-T1-predictor-fieldcopy.patch (T1's lines next to X2's) +
 #      patches/exp/T1-fieldcopy/t1_fieldcopy.h as src/models/t1_fieldcopy.h
 # Build: the record's pipeline (g++ PGO+LTO, -march=x86-64-v3, AVX-512/EVEX and RCPPS/RSQRTPS/libmvec guards),
-# release cmix only, compile-time -DE1CONF -DE1_GATE=3. Output: build/exp/T1/bin/cmix.
+# release cmix only, compile-time -DE1CONF -DE1_GATE=3. Output: build/exp/T1/bin/cmix (or $T1_OUT).
 # Runtime env (BOTH comp and decomp): see run.sh (C1's env + E2_A0/E2_AF + E12_DICT/E12_LR); the PGO training run
 # uses the same env (plus T1_DICT) so the profiled paths are the ones T1 runs. Tree: build/exp/T1/tree.
 set -euo pipefail
@@ -27,7 +27,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SRC="$REPO/third_party/fx2-cmix-transformer-v1"; E="$REPO/build/exp/T1"; P="$REPO/patches"
 DEFS="-DSEED=923 -DUPDATE_LIMIT=3000 -DE1CONF -DE1_GATE=3"
 [[ "$(git -C "$SRC" rev-parse HEAD)" == 83f2603f3f7751da5f429fd32669807eb8510494 ]] || { echo "third_party not at 83f2603" >&2; exit 1; }
-mkdir -p "$E/bin" "$E/logs"; rm -rf "$E/tree"
+OUT="${T1_OUT:-$E/bin/cmix}"; mkdir -p "$(dirname "$OUT")" "$E/logs"; rm -rf "$E/tree"
 rsync -a --exclude .git --exclude 'models/*.tch' --exclude 'cpp_infer/bench' "$SRC/" "$E/tree/"
 cd "$E/tree"
 git init -q . && git add -A && git -c user.name=build -c user.email=build@local commit -qm pristine
@@ -54,5 +54,5 @@ for pat in '%zmm' '%k[0-7]' '\{vex\}' $'\t62 [0-9a-f][0-9a-f] ' '\b(v?rcpps|v?rc
   if grep -qE "$pat" <<< "$dis"; then echo "FAIL: cmix matches '$pat'" >&2; exit 1; fi
 done
 if nm -D cmix | grep -q '_ZGV'; then echo "FAIL: cmix uses glibc libmvec" >&2; exit 1; fi
-cp cmix "$E/bin/cmix"
-echo "built $E/bin/cmix ($(stat -c %s "$E/bin/cmix") B)"
+cp cmix "$OUT"
+echo "built $OUT ($(stat -c %s "$OUT") B)"

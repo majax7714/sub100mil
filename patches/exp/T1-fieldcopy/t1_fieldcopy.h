@@ -220,10 +220,14 @@ class FieldCopy {
       if (line_.size() < 512) line_ += ch;
       line_len_++;
       if (title_line_ && line_len_ <= 11 && line_.compare(0, line_len_, "    <title>", line_len_) != 0) title_line_ = false;
-      if (in_page_) {
-        tail7_ += ch;
-        if (tail7_.size() > 7) tail7_.erase(0, tail7_.size() - 7);
-        if (tail7_ == "</text>") closed_ = true;
+      tail7_ += ch;
+      if (tail7_.size() > 7) tail7_.erase(0, 1);
+      if (tail7_ == "</text>") {
+        if (in_page_) closed_ = true;
+        if (iw_) {  // a group ends (it may hold long lines of moved text, so this is not a line test)
+          end_link();
+          group_++; grp_ = 0; groups_seen++;
+        }
       }
       if (ch == ':' && !active_ && line_.size() <= 14 && line_[0] == '[' && (iw_ || prev_line_ == "/contributor>"))
         try_link();
@@ -238,20 +242,9 @@ class FieldCopy {
 
   void end_line() {
     const std::string& L = line_;
-    if (link_open_) {
-      // the link's line is over: update the language's rate and the group history
-      auto& r = rate_[link_lang_];
-      r.first += link_eq_; r.second += 1;
-      eq_links += link_eq_;
-      grp_ = (grp_ == 1 || link_eq_) ? 1 : 2;
-      link_open_ = false;
-    }
-    if (iw_ && L.size() >= 7 && L.compare(L.size() - 7, 7, "</text>") == 0) {  // a group ends
-      group_++; grp_ = 0; groups_seen++;
-      return;
-    }
+    end_link();
     if (L == "  <page>") {
-      in_page_ = true; closed_ = false; empty_text_ = false; tail7_.clear(); page_title_.clear(); page_np_.clear();
+      in_page_ = true; closed_ = false; empty_text_ = false; page_title_.clear(); page_np_.clear();
     } else if (in_page_ && L.size() > 19 && L.compare(0, 11, "    <title>") == 0 &&
                L.compare(L.size() - 8, 8, "</title>") == 0 && line_len_ == L.size()) {
       size_t tl = L.size() - 19, npl = tl;
@@ -269,6 +262,15 @@ class FieldCopy {
       }
       in_page_ = false;
     }
+  }
+
+  void end_link() {  // the link's line is over: update the language's rate and the group history
+    if (!link_open_) return;
+    auto& r = rate_[link_lang_];
+    r.first += link_eq_; r.second += 1;
+    eq_links += link_eq_;
+    grp_ = (grp_ == 1 || link_eq_) ? 1 : 2;
+    link_open_ = false;
   }
 
   void try_link() {
