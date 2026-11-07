@@ -1,0 +1,175 @@
+diff --git a/src/bit_head.cpp b/src/bit_head.cpp
+index 0016d39..30a034d 100644
+--- a/src/bit_head.cpp
++++ b/src/bit_head.cpp
+@@ -180,9 +180,12 @@ struct Rng {
+   }
+ };
+ 
++// [sub100mil C3-full] the BITL_* environment switches are baked in: C3's settings (BITL_LR_E6=3000,
++// BITL_ACCUM=1), every other knob at its default. No environment variable is read.
+ long EnvL(const char* k, long d) {
+-  const char* v = std::getenv(k);
+-  return (v && *v) ? std::strtol(v, nullptr, 10) : d;
++  if (!std::strcmp(k, "BITL_LR_E6")) return 3000;
++  if (!std::strcmp(k, "BITL_ACCUM")) return 1;
++  return d;
+ }
+ 
+ float* Alloc(int n) {
+@@ -268,8 +271,7 @@ void Head::Configure() {
+   fastbw = (int)EnvL("BITL_FASTBW", 1);
+   stats = (int)EnvL("BITL_STATS", 0);
+   // columns to drop, as a bit mask over the stage-1 row (hex)
+-  const char* dm = std::getenv("BITL_DROP");
+-  drop_mask = (dm && *dm) ? std::strtoull(dm, nullptr, 16) : 0ULL;
++  drop_mask = 0ULL;  // [C3-full] was BITL_DROP
+   if (C <= 0 || C % 8 || nhid < 0 || nhid % 8 || accum < 1 || seq < 1 ||
+       mode < 0 || mode > 1) {
+     std::fprintf(stderr, "BITL: bad configuration\n");
+diff --git a/src/models/fxcmv1.cpp b/src/models/fxcmv1.cpp
+index cbaa011..e1c2c8d 100644
+--- a/src/models/fxcmv1.cpp
++++ b/src/models/fxcmv1.cpp
+@@ -4837,10 +4837,7 @@ unsigned int FXCM::NumOutputs() {
+ // The record used the last slot (num_models - 1), but fxcm fills only 429 of
+ // its 431 outputs, so that slot is the constant 0.5. E9_FXCM_FINAL=0 restores
+ // the record's behaviour (encoder and decoder must agree).
+-static const bool e9_on = [] {
+-    const char* v = getenv("E9_FXCM_FINAL");
+-    return !(v && *v && atoi(v) == 0);
+-}();
++static const bool e9_on = true;  // [sub100mil C3-full] was E9_FXCM_FINAL (default on)
+ unsigned int FXCM::FinalIndex() const {
+     if (e9_on && fxcmv1::e9_last_filled) return fxcmv1::e9_last_filled - 1;
+     return fxcmv1::model_predictions.size() - 1;
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 77c5b09..10c6a92 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -242,16 +242,16 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     sigmoid_(100001), vocab_(vocab), ppmd_only_(options.ppmd_only),
+     transformer_only_(options.transformer_only),
+     num_input_bytes_(options.num_input_bytes) {
+-  if (const char* d = getenv("E12_DICT")) {
++  // [sub100mil C3-full] E12 (mixer lr 0.004) and X2 are on whenever the stream is dictionary-coded; no env.
++  if (const char* d = options.spec_dict.c_str()) {
+     if (*d && !options.ppmd_only && !options.transformer_only) {
+-      const char* lr = getenv("E12_LR");
+-      e12_ = std::make_unique<e12::E12Mix>(d, options.e12_coded_block_header, lr && *lr ? atof(lr) : 0.002);
++      e12_ = std::make_unique<e12::E12Mix>(d, options.e12_coded_block_header, 0.004);
+       if (!e12_->spec.ok) { fprintf(stderr, "E12: cannot read dictionary %s\n", d); exit(1); }
+-      fprintf(stderr, "E12: arithmetic specialist on (%s, coded block header %d, lr %s)\n", d,
+-              (int)options.e12_coded_block_header, lr && *lr ? lr : "0.002");
++      fprintf(stderr, "E12: arithmetic specialist on (%s, coded block header %d, lr 0.004)\n", d,
++              (int)options.e12_coded_block_header);
+     }
+   }
+-  if (const char* d = getenv("X2_DICT")) {
++  if (const char* d = options.spec_dict.c_str()) {
+     if (*d && !options.ppmd_only && !options.transformer_only) {
+       x2_ = std::make_unique<x2::TimeLawMix>(d, options.e12_coded_block_header, 0.002);
+       if (!x2_->spec.ok) { fprintf(stderr, "X2: cannot read dictionary %s\n", d); exit(1); }
+@@ -297,20 +297,12 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+     half_scratch_.resize(vocab_size_);
+     transformer_probs_.resize(vocab_size_);
+     print_transformer_loss_ = true;
+-    {  // [sub100mil E2] runtime configuration (encoder and decoder must match)
+-      auto geti = [](const char* n, int d) {
+-        const char* v = getenv(n); return v && *v ? atoi(v) : d; };
+-      auto getf = [](const char* n, float d) {
+-        const char* v = getenv(n); return v && *v ? strtof(v, nullptr) : d; };
+-      e2_cfg_.fwk = geti("E2_FWK", 0);
+-      e2_cfg_.logit = geti("E2_LOGIT", 0);
+-      e2_cfg_.k0 = getf("E2_K0", e2_cfg_.k0);
+-      e2_cfg_.kf = getf("E2_KF", e2_cfg_.kf);
+-      e2_cfg_.tau = getf("E2_TAU", e2_cfg_.tau);
+-      e2_cfg_.a0 = getf("E2_A0", e2_cfg_.a0);
+-      e2_cfg_.af = getf("E2_AF", e2_cfg_.af);
+-      e2_cfg_.atau = getf("E2_ATAU", e2_cfg_.atau);
+-      e2_final_ = geti("E2_FINAL", 1) != 0;
++    {  // [sub100mil E2] configuration, baked in by C3-full (was E2_* env): the logit head, LR x0.5
++      e2_cfg_.fwk = 0;
++      e2_cfg_.logit = 1;
++      e2_cfg_.a0 = 0.25f;
++      e2_cfg_.af = 0.05f;
++      e2_final_ = true;
+       e2_on_ = e2_cfg_.on();
+       if (e2_on_) {
+         transformer_->e2_set(e2_cfg_);
+diff --git a/src/predictor.h b/src/predictor.h
+index a351085..aa34df1 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -52,6 +52,10 @@ struct PredictorOptions {
+   // [E12] true when the coded stream starts with preprocessor::Encode's 5-byte block header (-e / archive9 mode);
+   // runner.cpp stores that header raw in -c/-d with --transformer (slice mode).
+   bool e12_coded_block_header = false;
++  // [sub100mil C3-full] path of the WRT dictionary the stream was coded with (-c/-d: the dictionary argument;
++  // -e / argument-less / -x: ./.dict, extracted from the binary). E12 and X2 run iff it is nonempty. Replaces the
++  // E12_DICT / X2_DICT environment variables of the experiment builds.
++  std::string spec_dict;
+   // Run only the ppmd model. Predict() returns the ppmd's bit prediction and
+   // no other model is constructed or updated.
+   bool ppmd_only = false;
+diff --git a/src/runner.cpp b/src/runner.cpp
+index a15cdcc..19cecd4 100644
+--- a/src/runner.cpp
++++ b/src/runner.cpp
+@@ -55,6 +55,8 @@ namespace {
+   // the transformer could not take them as tokens; on enwik9 they happen to be
+   // in-vocabulary. Costs 5 bytes. -e and argless decompression are unchanged.
+   bool g_raw_block_header = false;
++  // [sub100mil C3-full] the dictionary's path, for E12/X2 (PredictorOptions::spec_dict).
++  std::string g_dict_path;
+   const int kRawHeaderBytes = 5;
+   const unsigned char kEnwik9Vocab[32] = {0xe8,0x16,0x04,0x00,0xff,0xff,0xff,0x03,0x01,0xfc,0x0f,0xf9,0xfe,0xff,0xff,0x07,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+ }
+@@ -908,6 +910,7 @@ bool RunCompression(bool enable_preprocess, const std::string& input_path,
+   predictor_options.num_input_bytes = temp_bytes;
+   predictor_options.transformer_weights = transformer_weights;
+   predictor_options.e12_coded_block_header = !g_raw_block_header;  // [E12]
++  if (dictionary != NULL) predictor_options.spec_dict = g_dict_path;  // [C3-full]
+   predictor_options.save_transformer_probs = extraction.save_transformer_probs;
+ #ifdef FX2_PROF
+   auto fx2_c0 = std::chrono::steady_clock::now();
+@@ -991,6 +994,7 @@ bool RunDecompression(const std::string& input_path,
+   PredictorOptions predictor_options;
+   predictor_options.transformer_weights = transformer_weights;
+   predictor_options.e12_coded_block_header = !g_raw_block_header;  // [E12]
++  if (dictionary != NULL) predictor_options.spec_dict = g_dict_path;  // [C3-full]
+   predictor_options.num_input_bytes = *output_bytes;
+   predictor_options.ppmd_only = extraction.ppmd_only;
+   predictor_options.transformer_only = extraction.transformer_only;
+@@ -1079,6 +1083,7 @@ int main(int argc, char** argv) {
+       }
+       input_path = argv[3];
+       output_path = argv[4];
++      g_dict_path = argv[2];  // [C3-full]
+     }
+     RequireReadableFile("input file", input_path);
+   }
+@@ -1098,6 +1103,7 @@ int main(int argc, char** argv) {
+     input_path = ".ready4cmix_decomp";
+     output_path = ".input_decomp" ;
+     dictionary = fopen(".dict", "rb");//_decomp
++    g_dict_path = ".dict";  // [C3-full]
+ 
+     if (!RunDecompression(input_path, temp_path, output_path, dictionary,
+         &input_bytes, &output_bytes, extraction, ".tfweights")) {
+@@ -1157,6 +1163,7 @@ int main(int argc, char** argv) {
+     // run compression
+     input_path = ".ready4cmix";
+     dictionary = fopen(".dict", "rb");
++    g_dict_path = ".dict";  // [C3-full]
+     if (!RunCompression(enable_preprocess, input_path, temp_path, output_path,
+         dictionary, &input_bytes, &output_bytes, extraction, ".tfweights")) {
+       return Help();
+@@ -1205,6 +1212,7 @@ int main(int argc, char** argv) {
+     input_path = argv[2];
+     output_path = argv[3];
+     dictionary = fopen(".dict", "rb");
++    g_dict_path = ".dict";  // [C3-full]
+     if (!RunDecompression(input_path, temp_path, output_path, dictionary,
+         &input_bytes, &output_bytes, extraction)) {
+       return Help();

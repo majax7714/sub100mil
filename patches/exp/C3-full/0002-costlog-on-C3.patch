@@ -1,0 +1,259 @@
+diff --git a/src/coder/decoder.cpp b/src/coder/decoder.cpp
+index 170ade5..3f089ad 100644
+--- a/src/coder/decoder.cpp
++++ b/src/coder/decoder.cpp
+@@ -23,6 +23,7 @@ int Decoder::Decode() {
+   const bool bitl = p_->BitlPost();
+   if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
+                                  p_->bitl_m1raw_, p_->bitl_override_);
++  if (p_->CostLogOn()) p_->CostLogCoded(p);  // [per-byte-cost, C3 port]
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   int bit = 0;
+diff --git a/src/coder/encoder.cpp b/src/coder/encoder.cpp
+index f49f9a5..5cc4a1f 100644
+--- a/src/coder/encoder.cpp
++++ b/src/coder/encoder.cpp
+@@ -17,6 +17,7 @@ void Encoder::Encode(int bit) {
+   const bool bitl = p_->BitlPost();
+   if (bitl) p = bit_head::Adjust(p, p_->bitl_stage1_, p_->bitl_n_stage1_,
+                                  p_->bitl_m1raw_, p_->bitl_override_);
++  if (p_->CostLogOn()) p_->CostLogCoded(p);  // [per-byte-cost, C3 port]
+   const unsigned int xmid = x1_ + ((x2_ - x1_) >> 16) * p +
+       (((x2_ - x1_) & 0xffff) * p >> 16);
+   if (bit) {
+diff --git a/src/models/fxcmv1.cpp b/src/models/fxcmv1.cpp
+index e1c2c8d..88dc081 100644
+--- a/src/models/fxcmv1.cpp
++++ b/src/models/fxcmv1.cpp
+@@ -109,6 +109,11 @@ void ResetPredictions() {
+     e9_last_filled = prediction_index;
+     prediction_index = 0;
+ }
++// [sub100mil per-byte-cost tool, C3 port] e9_last_filled plays the role of the tool's cost_log_last_count.
++float CostLogFinalP() {  // fxcm's own final prediction (its last AddPrediction(pr))
++    return e9_last_filled ? model_predictions[e9_last_filled - 1] : 0.5f;
++}
++unsigned int CostLogNumFilled() { return e9_last_filled; }
+ 
+ #define VERSION 22
+ 
+@@ -3557,6 +3562,18 @@ void MatchModel2update() {
+   }
+ }
+ 
++void CostLogMatchState(unsigned char out[4], bool* delta) {
++  int best = 0;
++  for (U32 i = 1; i < numberOfActiveCandidates; i++)
++    if (matchCandidates[i].isBetterThan(&matchCandidates[best])) best = i;
++  U32 len = matchCandidates[best].length;
++  out[0] = len > 255 ? 255 : len;
++  out[1] = len ? matchCandidates[best].expectedByte : 0;
++  out[2] = smatch.length > 255 ? 255 : smatch.length;
++  out[3] = smatch.length ? smatch.expectedByte : 0;
++  *delta = matchCandidates[best].delta || matchCandidates[best].lengthBak != 0;
++}
++
+ int MatchModel2mix() {
+   MatchModel2update();
+ 
+diff --git a/src/models/fxcmv1.h b/src/models/fxcmv1.h
+index 4c8f54b..e31e083 100644
+--- a/src/models/fxcmv1.h
++++ b/src/models/fxcmv1.h
+@@ -6,6 +6,13 @@
+ #include <memory>
+ 
+ namespace fxcmv1 {
++  // [sub100mil per-byte-cost tool] read-only view of the match models' state
++  // at the start of a byte: out[0..3] = MatchModel2 best candidate length
++  // (rebased, 0 = none, capped 255) and expected byte, SparseMatchModel length
++  // and expected byte; *delta = best candidate is in delta/recovery mode.
++  void CostLogMatchState(unsigned char out[4], bool* delta);
++  float CostLogFinalP();          // fxcm's final probability for the current bit
++  unsigned int CostLogNumFilled(); // how many of its outputs fxcm filled
+   class Predictor{
+ 
+ public:
+diff --git a/src/models/match.h b/src/models/match.h
+index 71d47eb..4eea5a1 100644
+--- a/src/models/match.h
++++ b/src/models/match.h
+@@ -15,6 +15,9 @@ class Match : public Model {
+   const std::valarray<float>& Predict() const;
+   void Perceive(int bit);
+   void ByteUpdate();
++  // [sub100mil per-byte-cost tool] read-only accessors
++  int MatchLengthBits() const { return match_length_; }
++  int ExpectedByte() const { return cur_byte_; }
+ 
+  private:
+   const std::vector<unsigned char>& history_;
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 10c6a92..b1fa978 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -346,6 +346,19 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+   AddDoubleIndirect();
+   AddMixers();
+   auxiliary_size_ = 2;
++  if (const char* path = getenv("FX2_COSTLOG")) {
++    if (*path) {
++      cost_log_ = fopen(path, "wb");
++      if (!cost_log_) Fail("FX2_COSTLOG: cannot open %s", path);
++      // 16-byte header: magic, version, record size
++      const char magic[8] = {'F','X','2','C','O','S','T','\0'};
++      uint32_t hdr[2] = {1, (uint32_t)sizeof(cl_rec_)};
++      fwrite(magic, 1, 8, cost_log_);
++      fwrite(hdr, 4, 2, cost_log_);
++      fprintf(stderr, "FX2_COSTLOG: writing per-byte costs to %s (fxcm outputs: %u)\n",
++          path, fxcm_model_->NumOutputs());
++    }
++  }
+ }
+ 
+ unsigned long long Predictor::GetNumModels() {
+@@ -679,10 +692,99 @@ float Predictor::Predict() {
+   if (e12_) p = e12_->Predict(p);  // [E12] final stage after SSE (and E1's APM)
+   if (x2_) p = x2_->Predict(p);  // [X2] metadata time law, final stage after E12
+   if (byte_mixer_override >= 0) {
++    if (cost_log_) {
++      cl_flags_ |= 2;
++      CostLogPredict(byte_mixer_override, ppmd_p, fxcmv1::CostLogFinalP());
++    }
+     return byte_mixer_override;
+   }
++  if (cost_log_) CostLogPredict(p, ppmd_p, fxcmv1::CostLogFinalP());
++  return p;
++}
++
++// [sub100mil per-byte-cost tool] -------------------------------------------
++namespace {
++inline float ClampP(float p) {
++  const float lo = 1.0f / 65536;
++  if (!(p >= lo)) return lo;  // also catches NaN
++  if (p > 1 - lo) return 1 - lo;
+   return p;
+ }
++inline void PutF32(unsigned char* d, float f) { memcpy(d, &f, 4); }
++inline void PutU16(unsigned char* d, uint16_t v) { memcpy(d, &v, 2); }
++}  // namespace
++
++Predictor::~Predictor() {
++  if (cost_log_) {
++    if (!cl_buf_.empty()) fwrite(cl_buf_.data(), 1, cl_buf_.size(), cost_log_);
++    fclose(cost_log_);
++    cost_log_ = nullptr;
++  }
++}
++
++// Called once per coded bit, right before the coder uses p_final.
++void Predictor::CostLogPredict(float p_final, float p_ppmd, float p_fxcm) {
++  if (manager_.bit_context_ == 1) {  // first bit of a byte: snapshot matches
++    memset(cl_rec_, 0, sizeof(cl_rec_));
++    int best = -1, best_len = -1;
++    for (unsigned int i = 0; i < match_models_.size(); ++i) {
++      int l = match_models_[i].MatchLengthBits();
++      if (l > best_len) best_len = l, best = i;
++    }
++    if (best >= 0) {
++      cl_rec_[1] = best_len;
++      cl_rec_[2] = match_models_[best].ExpectedByte();
++    }
++    bool delta = false;
++    fxcmv1::CostLogMatchState(cl_rec_ + 3, &delta);
++    if (delta) cl_flags_ |= 1;
++    cl_bit_ = 0;
++    static bool once = false;
++    if (!once) {
++      once = true;
++      fprintf(stderr, "FX2_COSTLOG: fxcm filled %u of %u outputs\n",
++          fxcmv1::CostLogNumFilled(), fxcm_model_->NumOutputs());
++    }
++  }
++  // The encoder's exact discretization (Encoder::Discretize).
++  cl_pdisc_ = 1 + 65534 * p_final;
++  cl_p_[0] = cl_pdisc_ / 65536.0f;
++  cl_p_[1] = ClampP(byte_mixer_output);
++  cl_p_[2] = ClampP(p_fxcm);
++  cl_p_[3] = ClampP(p_ppmd);
++}
++
++// [C3 port] The coder applies E3's BITLSTM correction (bit_head::Adjust) after Predict(), so the
++// probability it really codes with is only known there; the coder reports it here (observation only).
++void Predictor::CostLogCoded(unsigned int p_coded) {
++  cl_pdisc_ = p_coded;
++  cl_p_[0] = cl_pdisc_ / 65536.0f;
++}
++
++// Called at the top of Perceive(bit), before any model sees the bit.
++void Predictor::CostLogPerceive(int bit) {
++  for (int k = 0; k < 4; ++k) {
++    double q = bit ? cl_p_[k] : 1.0 - cl_p_[k];
++    cl_cost_[k] -= std::log2(q);
++  }
++  PutU16(cl_rec_ + 8 + 2 * cl_bit_, (uint16_t)cl_pdisc_);
++  ++cl_bit_;
++  if (manager_.bit_context_ >= 128) {  // last bit of the byte
++    cl_rec_[0] = (unsigned char)(manager_.bit_context_ * 2 + bit);
++    cl_rec_[7] = cl_flags_;
++    for (int k = 0; k < 4; ++k) PutF32(cl_rec_ + 24 + 4 * k, cl_cost_[k]);
++    cl_buf_.insert(cl_buf_.end(), cl_rec_, cl_rec_ + sizeof(cl_rec_));
++    if (cl_buf_.size() >= (1u << 20)) {
++      if (fwrite(cl_buf_.data(), 1, cl_buf_.size(), cost_log_) !=
++          cl_buf_.size()) Fail("FX2_COSTLOG: write failed");
++      fflush(cost_log_);
++      cl_buf_.clear();
++    }
++    for (int k = 0; k < 4; ++k) cl_cost_[k] = 0;
++    cl_flags_ = 0;
++  }
++}
++// ---------------------------------------------------------------------------
+ 
+ void Predictor::WritePpmdProbs() {
+   const std::valarray<float>& p = byte_model_->BytePredict();
+@@ -899,6 +1001,7 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  if (cost_log_) CostLogPerceive(bit);
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
+   {
+diff --git a/src/predictor.h b/src/predictor.h
+index aa34df1..a6ce9f4 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -177,6 +177,10 @@ class Predictor {
+  public:
+   Predictor(const std::vector<bool>& vocab,
+       const PredictorOptions& options = PredictorOptions());
++  ~Predictor();  // [sub100mil per-byte-cost tool] flushes FX2_COSTLOG
++  // [per-byte-cost, C3 port] the coder passes the probability it actually coded with (after E3's Adjust).
++  void CostLogCoded(unsigned int p_coded) ;
++  bool CostLogOn() const { return cost_log_ != nullptr; }
+   float Predict();
+   void Perceive(int bit);
+   void Pretrain(int bit);
+@@ -282,6 +286,20 @@ class Predictor {
+   std::vector<float> e2_row_;
+   float e2_output_ = 0.5f;
+   double e2_loss_sum_ = 0, e2_mix_loss_sum_ = 0;
++
++  // [sub100mil per-byte-cost tool] FX2_COSTLOG=<path>: append one record per
++  // coded byte (see patches/tools/per-byte-cost/README.md). Observation only:
++  // nothing here feeds back into any prediction.
++  void CostLogPredict(float p_final, float p_ppmd, float p_fxcm);
++  void CostLogPerceive(int bit);
++  FILE* cost_log_ = nullptr;
++  float cl_p_[4] = {0.5f, 0.5f, 0.5f, 0.5f};  // final, transformer, fxcm, ppmd
++  unsigned int cl_pdisc_ = 32768;             // coder's discretized P(bit=1)
++  double cl_cost_[4] = {0, 0, 0, 0};
++  unsigned char cl_rec_[40];
++  int cl_bit_ = 0;
++  unsigned char cl_flags_ = 0;
++  std::vector<unsigned char> cl_buf_;
+ };
+ 
+ #endif
