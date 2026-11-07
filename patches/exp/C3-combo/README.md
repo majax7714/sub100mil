@@ -13,6 +13,12 @@ its 100M number stays a clean C2 measurement; X2 is not re-run on 100M (the 100M
 - `build.sh`: C2's build + X2 (steps 9–10); output `build/exp/C3/bin/cmix`. PGO training uses C3's env.
 - `run.sh <name> <slice-name|path> <notes> [--fast]`: C2's env plus `X2_DICT` (method `fx2T+C3-<name>`).
 
-## Results
+## Results (all round-trip byte-exact; ledger rows `fx2T+C3-v1`, control `fx2T+C2-v1`)
 
-See the ledger rows `fx2T+C3-*`, and the C2 control on the X2 proxy (`fx2T+C2-v1` on `x2proxy_reord_r130000.xml`).
+| slice | C2 | C3 | X2 increment | X2 alone on the record |
+|---|---:|---:|---:|---:|
+| `build/exp/X2/slices/x2proxy_reord_r130000.xml` (989,764 B) | 25,219 | **24,175** | −1,044 | −1,046 (25,268 → 24,222) |
+| enwik9_10M | 1,261,828 | **1,261,700** | −128 | — |
+| enwik9_1M | — | 126,244 (record 126,473) | | |
+
+The X2 increment inside C3 reproduces X2's own number, so the two final stages stack additively.
