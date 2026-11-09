@@ -1,0 +1,518 @@
+diff --git a/src/models/g1_gln.h b/src/models/g1_gln.h
+index 0421aae..8006e14 100644
+--- a/src/models/g1_gln.h
++++ b/src/models/g1_gln.h
+@@ -33,17 +33,16 @@ inline float Stretch(float p) {
+ // Feature extraction. in1: the final (layer-1) mixer's stretched inputs: [0, nmix) the layer-0 mixer outputs,
+ // then fxcm, the byte mixer (transformer), E2. m1: the final mixer's raw logit; psse: after SSE; sq: stretch of
+ // the coded probability (after the BITLSTM head); e1cb: E1's per-bit confidence bucket (0..15).
+-inline void Features(const float* in1, int nmix, float m1, float psse, float sq, int e1cb, float* X, float* Z) {
+-  float m = 0, mx = -99, mn = 99;
+-  for (int i = 0; i < nmix; ++i) {
+-    m += in1[i];
+-    if (in1[i] > mx) mx = in1[i];
+-    if (in1[i] < mn) mn = in1[i];
+-  }
++// [C4] pfin: the predictor's final p (the BITLSTM head's input). z[3] is the BITLSTM head's own delta
++// stretch(pfin) - sq (was the spread max - min of the layer-0 mixers): exact sim on the G1 dumps 10M -842.6 B vs
++// -801.1, census 10M -627.7 vs -582.6, 1M -101.1 vs -92.6, census 1M -71.8 vs -74.7.
++inline void Features(const float* in1, int nmix, float m1, float psse, float pfin, float sq, int e1cb, float* X, float* Z) {
++  float m = 0;
++  for (int i = 0; i < nmix; ++i) m += in1[i];
+   m /= nmix;
+   const float fx = in1[nmix], tf = in1[nmix + 1], e2 = in1[nmix + 2];
+   X[0] = fx; X[1] = tf; X[2] = e2; X[3] = m1; X[4] = m; X[5] = Stretch(psse); X[6] = sq; X[7] = 0.5f;
+-  Z[0] = sq * 0.25f; Z[1] = (tf - sq) * 0.5f; Z[2] = (fx - sq) * 0.5f; Z[3] = (mx - mn) * 0.25f;
++  Z[0] = sq * 0.25f; Z[1] = (tf - sq) * 0.5f; Z[2] = (fx - sq) * 0.5f; Z[3] = (Stretch(pfin) - sq) * 1.0f;
+   Z[4] = (m1 - sq) * 0.5f; Z[5] = (e2 - sq) * 0.5f; Z[6] = (m - sq) * 0.5f; Z[7] = (e1cb - 7.5f) * 0.2f;
+ }
+ 
+diff --git a/src/models/t1_fieldcopy.h b/src/models/t1_fieldcopy.h
+index e805a31..2854b20 100644
+--- a/src/models/t1_fieldcopy.h
++++ b/src/models/t1_fieldcopy.h
+@@ -26,6 +26,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <vector>
++#include "wrt_dec.h"
+ 
+ namespace t1 {
+ 
+@@ -33,44 +34,15 @@ static const int NCLS = 12;
+ 
+ struct Cand { std::string s; double w; };
+ 
+-class FieldCopy {
++class FieldCopy : public wrt::Sink {
+  public:
+   bool ok = false;
+   long slots_opened = 0, groups_seen = 0, titles_queued = 0, eq_links = 0;
+ 
+-  FieldCopy(const char* dict_path, bool coded_block_header) : skip_(coded_block_header ? 6 : 1) {
+-    for (int c = 0; c < 256; c++) {
+-      int d = c;
+-      if ('{' <= d && d < 127) d += 'P' - '{';
+-      else if ('P' <= d && d < 'T') d -= 'P' - '{';
+-      else if ((':' <= d && d <= '?') || ('J' <= d && d <= 'O')) d ^= 0x70;
+-      if (d == 'X' || d == '`') d ^= 'X' ^ '`';
+-      SWAP_[c] = d;
+-    }
+-    for (int c = 0; c < 256; c++) ENC_[SWAP_[c] & 0xFF] = (uint8_t)c;
+-    FILE* f = fopen(dict_path, "rb");
+-    if (!f) return;
+-    std::string data;
+-    char buf[65536];
+-    size_t r;
+-    while ((r = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, r);
+-    fclose(f);
+-    std::vector<std::string> words;
+-    std::string cur;
+-    for (char c : data) {
+-      if (c >= 'a' && c <= 'z') cur += c;
+-      else if (!cur.empty()) { words.push_back(cur); cur.clear(); }
+-    }
+-    if (!cur.empty()) words.push_back(cur);
+-    const int b1 = 80, b2 = 80 + 3840, b3 = 80 + 3840 + 40960;
+-    for (int n = 0; n < (int)words.size() && n < b3; n++) {
+-      uint32_t code;
+-      if (n < b1) code = 0x80 + n;
+-      else if (n < b2) code = (0xD0 + (n - b1) / 80) + ((0x80 + (n - b1) % 80) << 8);
+-      else { int m = n - b2; code = (0xF0 + (m / 80) / 32) + ((0xD0 + (m / 80) % 32) << 8) + ((0x80 + m % 80) << 16); }
+-      dict_[code] = words[n];
+-    }
+-    ok = true;
++  // [C4] the WRT tables and decoder are wrt_dec.h's (shared with X2)
++  FieldCopy(const char* dict_path, bool coded_block_header)
++      : tabs_(wrt::Load(dict_path)), ENC_(tabs_->enc), dec_(tabs_.get()), skip_(coded_block_header ? 6 : 1) {
++    ok = tabs_->ok;
+   }
+ 
+   bool InSlot(int* cls) const { if (active_) *cls = cls_; return active_; }
+@@ -100,14 +72,12 @@ class FieldCopy {
+   }
+ 
+  private:
+-  int SWAP_[256];
+-  uint8_t ENC_[256];
+-  std::unordered_map<uint32_t, std::string> dict_;
++  std::shared_ptr<const wrt::Tables> tabs_;
++  const uint8_t* ENC_;
++  wrt::Decoder dec_;
+   long nbytes_ = 0;
+   int skip_;
+-  bool upper_ = false, capital_ = false, esc_ = false;
+-  int code_need_ = 0, code_shift_ = 0;
+-  uint32_t code_ = 0;
++  bool nl_ = false;  // the current coded byte ended a line
+ 
+   // slot following
+   bool active_ = false, alive_ = false, t_alive_ = false;
+@@ -178,42 +148,13 @@ class FieldCopy {
+       lb_e_.push_back((uint16_t)std::min<size_t>(line_len_, 65535));
+     }
+   }
+-  // returns true if this byte ended a line
++  // returns true if this byte ended a line (only a single decoded character can be '\n': words are a-z)
+   bool decode(uint8_t byte) {
+-    int c = SWAP_[byte];
+-    if (code_need_ > 0) {
+-      code_ += (uint32_t)c << code_shift_;
+-      code_shift_ += 8;
+-      if (c > 0xCF && code_shift_ < 24) return false;
+-      code_need_ = 0;
+-      emit_word();
+-    } else if (esc_) {
+-      esc_ = false; upper_ = false; return text((char)c);
+-    } else if (c == 0x0C) { esc_ = true; }
+-    else if (c == 0x07) { upper_ = true; }
+-    else if (c == 0x40) { capital_ = true; }
+-    else if (c == 0x06) { upper_ = false; }
+-    else if (c >= 0x80) {
+-      code_ = c; code_shift_ = 8;
+-      if (c > 0xCF) { code_need_ = 1; return false; }
+-      emit_word();
+-    } else {
+-      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) upper_ = false;
+-      if (capital_ || upper_) c = c - 'a' + 'A';
+-      capital_ = false;
+-      return text((char)(c & 0xFF));
+-    }
+-    return false;
+-  }
+-  void emit_word() {
+-    auto it = dict_.find(code_);
+-    std::string w = it == dict_.end() ? std::string() : it->second;
+-    if (!w.empty()) {
+-      if (capital_) { w[0] -= 32; capital_ = false; }
+-      if (upper_) for (auto& ch : w) ch = (char)toupper((unsigned char)ch);
+-    }
+-    for (char ch : w) text(ch);
++    nl_ = false;
++    dec_.Byte(byte, this);
++    return nl_;
+   }
++  void Text(char ch) override { if (text(ch)) nl_ = true; }
+ 
+   bool text(char ch) {
+     if (ch != '\n') {
+diff --git a/src/models/wrt_dec.h b/src/models/wrt_dec.h
+new file mode 100644
+index 0000000..d874690
+--- /dev/null
++++ b/src/models/wrt_dec.h
+@@ -0,0 +1,121 @@
++// [sub100mil C4] The WRT (phda9 word-replacing transform) decoder shared by X2 (x2_timelaw.h) and T1
++// (t1_fieldcopy.h). Both used to carry identical copies of the byte swap table, the dictionary loader and the
++// decoding state machine. Now one table set is loaded per dictionary path (shared while any user holds it) and
++// each model keeps only the small decoder state and a Sink that receives the decoded text. The decoding is the
++// same code path as before (same branches, same order), so the text each model sees is unchanged.
++#pragma once
++#include <cctype>
++#include <cstdint>
++#include <cstdio>
++#include <memory>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace wrt {
++
++struct Tables {
++  bool ok = false;
++  int swap[256];      // coded byte -> decoded symbol
++  uint8_t enc[256];   // decoded symbol -> coded byte
++  std::unordered_map<uint32_t, std::string> dict;  // word code -> lower-case word
++};
++
++// The tables for dictionary DICT_PATH; loaded once while some model holds them. ok is false if the file can't be read.
++inline std::shared_ptr<const Tables> Load(const char* dict_path) {
++  static std::string last_path;
++  static std::weak_ptr<const Tables> last;
++  if (auto t = last.lock()) if (last_path == dict_path) return t;
++  auto t = std::make_shared<Tables>();
++  for (int c = 0; c < 256; c++) {
++    int d = c;
++    if ('{' <= d && d < 127) d += 'P' - '{';
++    else if ('P' <= d && d < 'T') d -= 'P' - '{';
++    else if ((':' <= d && d <= '?') || ('J' <= d && d <= 'O')) d ^= 0x70;
++    if (d == 'X' || d == '`') d ^= 'X' ^ '`';
++    t->swap[c] = d;
++  }
++  for (int c = 0; c < 256; c++) t->enc[t->swap[c] & 0xFF] = (uint8_t)c;
++  FILE* f = fopen(dict_path, "rb");
++  if (!f) return t;
++  std::string data;
++  char buf[65536];
++  size_t r;
++  while ((r = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, r);
++  fclose(f);
++  std::vector<std::string> words;
++  std::string cur;
++  for (char c : data) {
++    if (c >= 'a' && c <= 'z') cur += c;
++    else if (!cur.empty()) { words.push_back(cur); cur.clear(); }
++  }
++  if (!cur.empty()) words.push_back(cur);
++  const int b1 = 80, b2 = 80 + 3840, b3 = 80 + 3840 + 40960;
++  for (int n = 0; n < (int)words.size() && n < b3; n++) {
++    uint32_t code;
++    if (n < b1) code = 0x80 + n;
++    else if (n < b2) code = (0xD0 + (n - b1) / 80) + ((0x80 + (n - b1) % 80) << 8);
++    else { int m = n - b2; code = (0xF0 + (m / 80) / 32) + ((0xD0 + (m / 80) % 32) << 8) + ((0x80 + m % 80) << 16); }
++    t->dict[code] = words[n];
++  }
++  t->ok = true;
++  last = t;
++  last_path = dict_path;
++  return t;
++}
++
++class Sink {
++ public:
++  virtual void Text(char ch) = 0;
++ protected:
++  ~Sink() = default;
++};
++
++// Decoder state; Byte() feeds the decoded characters of one coded byte to the sink (none while a word code is
++// incomplete or for a case/escape marker). A dictionary word never contains '\n'.
++class Decoder {
++ public:
++  explicit Decoder(const Tables* t) : t_(t) {}
++  void Byte(uint8_t byte, Sink* s) {
++    int c = t_->swap[byte];
++    if (code_need_ > 0) {
++      code_ += (uint32_t)c << code_shift_;
++      code_shift_ += 8;
++      if (c > 0xCF && code_shift_ < 24) return;
++      code_need_ = 0;
++      Word(s);
++    } else if (esc_) {
++      esc_ = false; upper_ = false; s->Text((char)c);
++    } else if (c == 0x0C) { esc_ = true; }
++    else if (c == 0x07) { upper_ = true; }
++    else if (c == 0x40) { capital_ = true; }
++    else if (c == 0x06) { upper_ = false; }
++    else if (c >= 0x80) {
++      code_ = c; code_shift_ = 8;
++      if (c > 0xCF) { code_need_ = 1; return; }
++      Word(s);
++    } else {
++      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) upper_ = false;
++      if (capital_ || upper_) c = c - 'a' + 'A';
++      capital_ = false;
++      s->Text((char)(c & 0xFF));
++    }
++  }
++
++ private:
++  const Tables* t_;
++  bool upper_ = false, capital_ = false, esc_ = false;
++  int code_need_ = 0, code_shift_ = 0;
++  uint32_t code_ = 0;
++  void Word(Sink* s) {
++    auto it = t_->dict.find(code_);
++    std::string w = it == t_->dict.end() ? std::string() : it->second;
++    if (!w.empty()) {
++      if (capital_) { w[0] -= 32; capital_ = false; }
++      if (upper_) for (auto& ch : w) ch = (char)toupper((unsigned char)ch);
++    }
++    for (char ch : w) s->Text(ch);
++  }
++};
++
++}  // namespace wrt
+diff --git a/src/models/x2_timelaw.h b/src/models/x2_timelaw.h
+index c3a2f58..8bae195 100644
+--- a/src/models/x2_timelaw.h
++++ b/src/models/x2_timelaw.h
+@@ -29,6 +29,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <vector>
++#include "wrt_dec.h"
+ 
+ namespace x2 {
+ 
+@@ -36,43 +37,16 @@ enum Cls { TIME, RPID, NCLS };
+ 
+ struct Cand { std::string s; double w; };
+ 
+-class TimeLaw {
++class TimeLaw : public wrt::Sink {
+  public:
+   bool ok = false;
+   long slots_opened[NCLS] = {0};
+ 
+-  TimeLaw(const char* dict_path, bool coded_block_header) : skip_(coded_block_header ? 6 : 1) {
+-    for (int c = 0; c < 256; c++) {
+-      int d = c;
+-      if ('{' <= d && d < 127) d += 'P' - '{';
+-      else if ('P' <= d && d < 'T') d -= 'P' - '{';
+-      else if ((':' <= d && d <= '?') || ('J' <= d && d <= 'O')) d ^= 0x70;
+-      if (d == 'X' || d == '`') d ^= 'X' ^ '`';
+-      SWAP_[c] = d;
+-    }
+-    for (int c = 0; c < 256; c++) ENC_[SWAP_[c] & 0xFF] = (uint8_t)c;
+-    FILE* f = fopen(dict_path, "rb");
+-    if (!f) return;
+-    std::string data;
+-    char buf[65536];
+-    size_t r;
+-    while ((r = fread(buf, 1, sizeof buf, f)) > 0) data.append(buf, r);
+-    fclose(f);
+-    std::vector<std::string> words;
+-    std::string cur;
+-    for (char c : data) {
+-      if (c >= 'a' && c <= 'z') cur += c;
+-      else if (!cur.empty()) { words.push_back(cur); cur.clear(); }
+-    }
+-    if (!cur.empty()) words.push_back(cur);
+-    const int b1 = 80, b2 = 80 + 3840, b3 = 80 + 3840 + 40960;
+-    for (int n = 0; n < (int)words.size() && n < b3; n++) {
+-      uint32_t code;
+-      if (n < b1) code = 0x80 + n;
+-      else if (n < b2) code = (0xD0 + (n - b1) / 80) + ((0x80 + (n - b1) % 80) << 8);
+-      else { int m = n - b2; code = (0xF0 + (m / 80) / 32) + ((0xD0 + (m / 80) % 32) << 8) + ((0x80 + m % 80) << 16); }
+-      dict_[code] = words[n];
+-    }
++  // [C4] the WRT tables and decoder are wrt_dec.h's (shared with T1)
++  TimeLaw(const char* dict_path, bool coded_block_header)
++      : tabs_(wrt::Load(dict_path)), SWAP_(tabs_->swap), ENC_(tabs_->enc), dec_(tabs_.get()),
++        skip_(coded_block_header ? 6 : 1) {
++    if (!tabs_->ok) return;
+     for (int i = 0; i < 32; i++) { sc_sum_[i] = 8.0; sc_n_[i] = 1.0; }
+     ok = true;
+   }
+@@ -111,14 +85,12 @@ class TimeLaw {
+ 
+  private:
+   static constexpr int64_t HI = 18100000;
+-  int SWAP_[256];
+-  uint8_t ENC_[256];
+-  std::unordered_map<uint32_t, std::string> dict_;
++  std::shared_ptr<const wrt::Tables> tabs_;
++  const int* SWAP_;
++  const uint8_t* ENC_;
++  wrt::Decoder dec_;
+   long nbytes_ = 0;
+   int skip_;
+-  bool upper_ = false, capital_ = false, esc_ = false;
+-  int code_need_ = 0, code_shift_ = 0;
+-  uint32_t code_ = 0;
+ 
+   // slot following (as e12::ArithSpec)
+   bool active_ = false, alive_ = false;
+@@ -191,39 +163,9 @@ class TimeLaw {
+     follow(byte);
+     nbytes_++;
+     if (nbytes_ <= skip_) return;
+-    int c = SWAP_[byte];
+-    if (code_need_ > 0) {
+-      code_ += (uint32_t)c << code_shift_;
+-      code_shift_ += 8;
+-      if (c > 0xCF && code_shift_ < 24) return;
+-      code_need_ = 0;
+-      emit_word();
+-    } else if (esc_) {
+-      esc_ = false; upper_ = false; text((char)c);
+-    } else if (c == 0x0C) { esc_ = true; }
+-    else if (c == 0x07) { upper_ = true; }
+-    else if (c == 0x40) { capital_ = true; }
+-    else if (c == 0x06) { upper_ = false; }
+-    else if (c >= 0x80) {
+-      code_ = c; code_shift_ = 8;
+-      if (c > 0xCF) { code_need_ = 1; return; }
+-      emit_word();
+-    } else {
+-      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) upper_ = false;
+-      if (capital_ || upper_) c = c - 'a' + 'A';
+-      capital_ = false;
+-      text((char)(c & 0xFF));
+-    }
+-  }
+-  void emit_word() {
+-    auto it = dict_.find(code_);
+-    std::string w = it == dict_.end() ? std::string() : it->second;
+-    if (!w.empty()) {
+-      if (capital_) { w[0] -= 32; capital_ = false; }
+-      if (upper_) for (auto& ch : w) ch = (char)toupper((unsigned char)ch);
+-    }
+-    for (char ch : w) text(ch);
++    dec_.Byte(byte, this);
+   }
++  void Text(char ch) override { text(ch); }
+ 
+   static bool all_digits(const std::string& s, size_t from) {
+     if (s.size() <= from) return false;
+diff --git a/src/predictor.cpp b/src/predictor.cpp
+index 10c6a92..af10dd6 100644
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -258,6 +258,20 @@ Predictor::Predictor(const std::vector<bool>& vocab,
+       fprintf(stderr, "X2: metadata time law on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
+     }
+   }
++  // [sub100mil C4] T1 (interlanguage title copy, final stage after X2, mixer lr 0.004) and G1 (GLN final stage
++  // after the BITLSTM head, n 8 k 8, gated on the BITLSTM delta) are on exactly when E12/X2 are: whenever the
++  // stream is dictionary-coded. No env. (Without a dictionary, i.e. comp9's dict/order streams, nothing changes.)
++  if (const char* d = options.spec_dict.c_str()) {
++    if (*d && !options.ppmd_only && !options.transformer_only) {
++      t1_ = std::make_unique<t1::FieldCopyMix>(d, options.e12_coded_block_header, 0.004);
++      if (!t1_->spec.ok) { fprintf(stderr, "T1: cannot read dictionary %s\n", d); exit(1); }
++      fprintf(stderr, "T1: interlanguage field copy on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
++      g1::Config gc;
++      g1_ = std::make_unique<g1::Gln>(gc);
++      fprintf(stderr, "G1: GLN final stage on (n %d k %d lr %g lrmin %g bscale %g seed %d tau %g, z3 = BITLSTM delta)\n",
++              gc.n, gc.k, gc.lr, gc.lrmin, gc.bscale, gc.seed, gc.tau);
++    }
++  }
+   for (int i = 0; i < 256; ++i) {
+     if (vocab_[i]) vocab_bytes_.push_back(i);
+   }
+@@ -664,6 +678,7 @@ float Predictor::Predict() {
+   p = Sigmoid::Logistic(bitl_m1raw_);
+   }
+   { PROF(SSE_); p = sse_.Predict(p); }
++  g1_psse_ = p;  // [G1]
+ #ifdef E1_APM
+   {
+ #if E1_APM == 2
+@@ -678,12 +693,29 @@ float Predictor::Predict() {
+ #endif
+   if (e12_) p = e12_->Predict(p);  // [E12] final stage after SSE (and E1's APM)
+   if (x2_) p = x2_->Predict(p);  // [X2] metadata time law, final stage after E12
++  if (t1_) p = t1_->Predict(p);  // [T1] interlanguage title = English title, final stage after X2
++  g1_pfin_ = p;  // [C4 G1] the predictor's final p (the BITLSTM head's input), for G1's gate feature z[3]
+   if (byte_mixer_override >= 0) {
+     return byte_mixer_override;
+   }
+   return p;
+ }
+ 
++// [G1] GLN final stage on the coder's probability (after the BITLSTM head). Skipped on override bits.
++unsigned int Predictor::G1Adjust(unsigned int q) {
++  g1_active_ = false;
++  if (!g1_ || bitl_override_) return q;
++  float X[g1::KX], Z[g1::ZD];
++  g1::Features(&layers_[1].Inputs()[0], (int)mixer_0_.size(), bitl_m1raw_, g1_psse_, g1_pfin_,
++               g1::Stretch(q / 65536.0f), (int)e1_cb_, X, Z);
++  const float p = g1_->Squash(g1_->Predict(X, Z));
++  unsigned int q2 = (unsigned int)(1.0f + 65534.0f * p);
++  if (q2 < 1) q2 = 1;
++  if (q2 > 65535) q2 = 65535;
++  g1_active_ = true;
++  return q2;
++}
++
+ void Predictor::WritePpmdProbs() {
+   const std::valarray<float>& p = byte_model_->BytePredict();
+   for (unsigned int i = 0; i < vocab_size_; ++i) {
+@@ -899,8 +931,10 @@ void Predictor::Perceive(int bit) {
+     }
+     return;
+   }
++  if (g1_active_) g1_->Update(bit);  // [G1]
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
++  if (t1_) t1_->Update(bit);  // [T1]
+   {
+   PROF(CMO);
+   bracket_model_->Perceive(bit);
+diff --git a/src/predictor.h b/src/predictor.h
+index aa34df1..806bdf6 100644
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -18,6 +18,8 @@
+ #include "models/fxcmv1.h"
+ #include "models/e12_arith.h"
+ #include "models/x2_timelaw.h"
++#include "models/t1_fieldcopy.h"
++#include "models/g1_gln.h"
+ #include "mixer/lstm.h"
+ #include "contexts/context-hash.h"
+ #include "contexts/bracket-context.h"
+@@ -188,6 +190,9 @@ class Predictor {
+   int bitl_n_stage1_ = 0;
+   float bitl_m1raw_ = 0.0f;
+   int bitl_override_ = 0;
++  // [sub100mil G1] GLN final stage after the BITLSTM head: the coder passes its 16-bit
++  // probability through this between Predict() and Perceive().
++  unsigned int G1Adjust(unsigned int q);
+ 
+  private:
+   unsigned long long GetNumModels();
+@@ -249,6 +254,12 @@ class Predictor {
+   std::unique_ptr<e12::E12Mix> e12_;
+   // X2 metadata-block time law + redirect page-id law (final stage after E12); on when X2_DICT names english.dic.
+   std::unique_ptr<x2::TimeLawMix> x2_;
++  // T1 interlanguage title = English title (final stage after X2); on with E12/X2 (a dictionary is in use).
++  std::unique_ptr<t1::FieldCopyMix> t1_;
++  std::unique_ptr<g1::Gln> g1_;  // [G1]
++  bool g1_active_ = false;
++  float g1_psse_ = 0;
++  float g1_pfin_ = 0.5f;  // [C4]
+   int byte_to_index_[256];
+   std::vector<uint16_t> half_scratch_;   // float16-rounded distributions
+   std::vector<float> transformer_probs_; // the transformer's output row
