@@ -1,0 +1,8 @@
+center 1 z0 -8 glr 0.02
+tokens 5763179 W 2048 KD 192 LSH 0  static 1275586.8 B  head 1271375.2 B (head-static -4211.7)
+cost dump: matched 5763179 skipped 1330  record 1264601.6 B
+mean maxcos 0.8441
+cache theta 16    alone 2407887.4 B | LIN -91.8 B | LOG -180.3 B | FIN -32.9 B (vs head / record)
+cache theta 32    alone 3250671.4 B | LIN -103.2 B | LOG -224.1 B | FIN -36.1 B (vs head / record)
+cache theta 64    alone 4158902.4 B | LIN -168.0 B | LOG -248.1 B | FIN -38.5 B (vs head / record)
+LIN gain by maxcos bucket (theta 32): [0.00: n 1, +0.0 B] [0.19: n 186, +0.0 B] [0.25: n 2277, -0.4 B] [0.31: n 8526, +0.1 B] [0.38: n 21833, -0.8 B] [0.44: n 53796, +0.2 B] [0.50: n 115649, +0.3 B] [0.56: n 213438, -1.0 B] [0.62: n 346393, -1.7 B] [0.69: n 482991, -4.3 B] [0.75: n 623836, -9.6 B] [0.81: n 932556, -18.0 B] [0.88: n 1376651, -43.1 B] [0.94: n 1585046, -24.8 B] 

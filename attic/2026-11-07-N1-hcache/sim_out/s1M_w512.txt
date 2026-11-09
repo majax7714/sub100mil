@@ -1,0 +1,9 @@
+tokens 552115 W 512 KD 192 LSH 0  static 127036.4 B  head 126734.2 B (head-static -302.2)
+cost dump: matched 552115 skipped 173  record 126424.0 B
+mean maxcos 0.8603
+cache theta 4     alone 358256.6 B | LIN +372.7 B | LOG +419.1 B | FIN +401.5 B (vs head / record)
+cache theta 8     alone 309018.0 B | LIN +321.9 B | LOG +603.0 B | FIN +350.5 B (vs head / record)
+cache theta 16    alone 301919.7 B | LIN +231.8 B | LOG +859.3 B | FIN +266.1 B (vs head / record)
+cache theta 32    alone 352536.0 B | LIN +238.4 B | LOG +1104.2 B | FIN +274.6 B (vs head / record)
+cache theta 64    alone 424182.8 B | LIN +253.2 B | LOG +1258.0 B | FIN +284.0 B (vs head / record)
+LIN gain by maxcos bucket (theta 16): [0.00: n 1, +0.0 B] [0.12: n 3, +0.0 B] [0.19: n 33, +0.3 B] [0.25: n 263, +2.1 B] [0.31: n 1307, +7.4 B] [0.38: n 3435, +13.6 B] [0.44: n 6116, +15.8 B] [0.50: n 10109, +23.8 B] [0.56: n 14486, +19.0 B] [0.62: n 23565, +19.8 B] [0.69: n 40440, +23.0 B] [0.75: n 54609, +27.9 B] [0.81: n 72449, +34.6 B] [0.88: n 133345, +28.3 B] [0.94: n 191954, +16.2 B] 
