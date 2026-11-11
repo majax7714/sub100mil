@@ -10,7 +10,7 @@
 // visited in page order; hashed features (title tokens, links and words of the lead, categories, templates,
 // links) vote with an integer IDF for the clusters of the last ORD_WIN earlier articles sharing each feature;
 // votes are smeared onto axis neighbours, normalised by cluster fill, and the last two clusters of the same page
-// class get a bonus. Residual symbol per article: 0 = opens a cluster, 1 + r = the same-class cluster of rank r in
+// class get a bonus. Residual symbol per article (stored class by class): 0 = opens a cluster, 1 + r = the same-class cluster of rank r in
 // the vote, ORD_ESC + c = cluster c. The decompressor needs none of this (it sorts pages by id).
 // The scheme (rule + residual, vote for clusters with axis smoothing) is cmix-neif's (its order_codec.h, GPL);
 // this is an independent implementation for the UNMODIFIED fx2 order, so the coded stream does not change.
@@ -266,11 +266,16 @@ ORD_COLD static bool Decode(vector<Page>& pages, const vector<int64_t>& res, vec
   int32_t nrun = (int32_t)get();
   vector<int32_t> startsv(nrun); for (auto& s : startsv) s = (int32_t)get();
   Vote V; V.init(nrun, startsv);
+  // the symbols are stored class by class (six sections, each in page order)
+  size_t cur[7] = {p, 0, 0, 0, 0, 0, 0};
+  for (int32_t t = 0; t < n; ++t) ++cur[M.kl[t] + 1];
+  for (int k = 1; k < 7; ++k) cur[k] += cur[k - 1];
+  if (cur[6] != res.size()) return false;
   vector<int32_t> clus(n, -1); int32_t n_seen = 0;
   for (int32_t t = 0; t < n; ++t) {
     int k = M.kl[t];
     V.run(t, M.feats[t], M.post, M.idf, clus, n_seen, k);
-    int64_t sym = get(); int32_t cl;
+    int64_t sym = res[cur[k]++]; int32_t cl;
     if (sym == 0) { cl = n_seen++; if (cl >= nrun) return false; V.ccls[cl] = (uint8_t)k; }
     else if (sym < P_ESC) {
       size_t m = V.filter(k), r = (size_t)(sym - 1); if (r >= m) return false;

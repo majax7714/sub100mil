@@ -82,6 +82,7 @@ int main(int argc, char** argv) {
   out.push_back(nrun); for (int32_t a = 0; a < nrun; ++a) out.push_back(seq_of_axis[a]);
   size_t hdr = out.size();
   Vote V; V.init(nrun, seq_of_axis);
+  vector<int64_t> sec[6];
   vector<int32_t> clus(n, -1); int32_t n_seen = 0;
   long cnt_new = 0, cnt_esc = 0, cnt_r[6] = {0}; double h_adapt = 0; vector<int> freq(P_ESC + 1, 1); long ftot = P_ESC + 1;
   for (int32_t t = 0; t < n; ++t) {
@@ -93,11 +94,12 @@ int main(int argc, char** argv) {
       int64_t r = 0; for (int32_t x : V.touch) if (x != c && V.ccls[x] == k && V.better(x, c)) ++r;
       if (r + 1 < P_ESC) { sym = 1 + r; cnt_r[r == 0 ? 0 : r == 1 ? 1 : r < 4 ? 2 : r < 16 ? 3 : r < 64 ? 4 : 5]++; } else { sym = P_ESC + c; ++cnt_esc; }
     } else { sym = P_ESC + c; ++cnt_esc; }
-    out.push_back(sym);
+    sec[k].push_back(sym);
     int s = sym >= P_ESC ? P_ESC : (int)sym;   // adaptive order-0 estimate (+ log2(n_seen) for an escape)
     h_adapt += -log2((double)freq[s] / ftot) + (sym >= P_ESC ? log2((double)max(1, n_seen)) : 0); freq[s] += 24; ftot += 24;
     clus[t] = c; V.commit(c, k);
   }
+  for (auto& v : sec) out.insert(out.end(), v.begin(), v.end());
   WriteRes(argv[4], out);
   fprintf(stderr, "class corrections %ld; ", ncorr);
   { long h[6] = {0}; for (int32_t t = 0; t < n; ++t) ++h[tk[t]]; fprintf(stderr, "classes normal/census/image/disam/geodis/hndis %ld/%ld/%ld/%ld/%ld/%ld; ", h[0], h[1], h[2], h[3], h[4], h[5]); }

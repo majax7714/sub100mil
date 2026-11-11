@@ -21,7 +21,8 @@ The scheme is cmix-neif's (order rule + residual; its `order_codec.h`), re-imple
 
 The residual is "%d\n" text like the old order file: number of exception pages and their index deltas (pages where
 "is in the order file" differs from the redirect prefix test: 38), number of class corrections and (delta, class)
-pairs (0), number of clusters and the axis order of the clusters (3,801), then one symbol per article in page order
+pairs (0), number of clusters and the axis order of the clusters (3,801), then one symbol per article, class by class
+(normal, census, image, disambiguation, geodis, hndis), in page order inside a class
 (0 = opens a cluster, 1 + rank in the vote among clusters of its class, 4096 + cluster).
 
 ## Status (2026-11-11)
