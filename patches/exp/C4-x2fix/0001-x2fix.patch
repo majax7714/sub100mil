@@ -1,0 +1,66 @@
+diff --git a/src/models/x2_timelaw.h b/src/models/x2_timelaw.h
+index 8bae195..c4816b4 100644
+--- a/src/models/x2_timelaw.h
++++ b/src/models/x2_timelaw.h
+@@ -14,6 +14,11 @@
+ // likely one of the next ids after the previous record's that no earlier record used: candidates are the next 64
+ // unused ids as deltas, weighted (1 + j)^-1.5. The slot opens only after 4 consecutive records with deltas in
+ // [1, 64] (identity-order regions); in the reordered article part deltas jump and it stays closed.
++// [x2fix 2026-11-11] The page id is tracked exactly: a page with a <restrictions> element has a "restrictions>..."
++// line between its delta and "revision>", and its delta used to be dropped (1,013 pages of enwik9; the tracked id
++// drifted by +2,740,978, so the law's "unused id" bitmap was misaligned in every redirect slot). The bitmap index
++// is bounded at both ends (it used to be read at a negative index when the tracked id went below -1), and the
++// numeric fields are length-bounded so that no input can overflow the id or time arithmetic.
+ //
+ // Everything is computed from already-coded bytes (the same binary compresses and decompresses). The mixing is
+ // E12Mix's: outside slots p passes through; inside, a logistic mixer over stretch(p), a bias,
+@@ -108,7 +113,9 @@ class TimeLaw : public wrt::Sink {
+   std::vector<bool> used_;   // page ids seen
+   std::map<int64_t, int64_t> cal_;  // revision id (>= HI) -> time
+   double sc_sum_[32], sc_n_[32];
+-  bool pending_ = false;     // a ">DELTA" line was just seen; it's a record if "revision>" follows
++  bool pending_ = false;     // a ">DELTA" line was just seen; it's a record if "revision>" follows (directly or
++                             // after the page's "restrictions>..." line)
++  static constexpr int64_t PID_LIM = 1000000000000000LL;  // |tracked id| bound (a delta has at most 14 digits)
+   int64_t pending_delta_ = 0;
+   // the open time slot's prediction (for the scale update)
+   bool ts_pred_ = false; double ts_p_ = 0; int ts_gb_ = 0;
+@@ -195,10 +202,13 @@ class TimeLaw : public wrt::Sink {
+         && (prev_line_ == "/contributor>" || !have_pid_)) {
+       pending_ = true;  // a record's page-id delta, if "revision>" follows
+       pending_delta_ = atoll(L.c_str() + 1);
++    } else if (was_pending && L.compare(0, 13, "restrictions>") == 0) {
++      pending_ = true;  // [x2fix] the delta's record goes on: "revision>" comes next
+     } else if (L == "revision>") {
+       if (was_pending) {
+         int64_t delta = pending_delta_;
+         int64_t pid = (have_pid_ ? prev_pid_ : 0) + delta;
++        pid = std::max(-PID_LIM, std::min(PID_LIM, pid));  // [x2fix] no overflow on any input
+         good_run_ = (have_pid_ && delta >= 1 && delta <= 64) ? good_run_ + 1 : 0;
+         prev_pid_ = pid; have_pid_ = true;
+         if (pid >= 0 && pid < 50000000) {
+@@ -207,11 +217,13 @@ class TimeLaw : public wrt::Sink {
+         }
+       }
+       want_rev_ = true; rev_ = -1;
+-    } else if (want_rev_ && L.size() > 3 && L.compare(0, 3, "id>") == 0 && all_digits(L, 3)) {
++    } else if (want_rev_ && L.size() > 3 && L.size() <= 21 && L.compare(0, 3, "id>") == 0 && all_digits(L, 3)) {
+       rev_ = atoll(L.c_str() + 3); want_rev_ = false;
+     } else if (L.size() > 11 && L.compare(0, 11, "timestamp>0") == 0) {
+       size_t colon = L.find(':');
+-      if (rev_ >= HI && colon != std::string::npos && colon > 12 && all_digits(L, colon + 1)) {
++      // [x2fix] at most 9 digits per number (real ones: 3 and 5), so T can't overflow
++      if (rev_ >= HI && colon != std::string::npos && colon > 12 && colon <= 21 && L.size() - colon <= 10 &&
++          all_digits(L, colon + 1)) {
+         bool okd = true;
+         for (size_t i = 11; i < colon; i++) if (L[i] < '0' || L[i] > '9') okd = false;
+         if (okd) {
+@@ -258,7 +270,7 @@ class TimeLaw : public wrt::Sink {
+     int64_t x = prev_pid_ + 1;
+     char buf[32];
+     while ((int)c.size() < 64) {
+-      if (x >= (int64_t)used_.size() || !used_[x]) {
++      if (x < 0 || x >= (int64_t)used_.size() || !used_[(size_t)x]) {  // [x2fix] x < 0: never a used id
+         snprintf(buf, sizeof buf, "%lld\n", (long long)(x - prev_pid_));
+         c.push_back({enc(buf), std::pow(1.0 + c.size(), -1.5)});
+       }
