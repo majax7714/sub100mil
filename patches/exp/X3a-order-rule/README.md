@@ -25,11 +25,22 @@ pairs (0), number of clusters and the axis order of the clusters (3,801), then o
 (normal, census, image, disambiguation, geodis, hndis), in page order inside a class
 (0 = opens a cluster, 1 + rank in the vote among clusters of its class, 4096 + cluster).
 
-## Status (2026-11-11)
+- `smoke.sh DIR [MIN]`: assembles comp9 with the residual as its order block and runs `-e enwik9` until MIN minutes
+  after the coder starts; compares `.main_reordered`, `.ready4cmix`, `.dict` with the record's -e run.
 
-- Exactness [measured]: `order_rule_enc check build/exp/E12/full/.main order_main.res build/exp/E12/full/.main_reordered`
+## Status (2026-11-11), all measured
+
+| | C4 | X3a |
+|---|---:|---:|
+| `comp_order` | 181,132 | **74,675** |
+| exe raw / packed | 537,888 / 200,960 | 546,240 / **206,560** |
+| comp9 | 3,384,847 | **3,283,990** |
+| S | | **−95,257 B** (order −106,457, exe +5,600 × 2) |
+
+- Exactness offline: `order_rule_enc check build/exp/E12/full/.main RES build/exp/E12/full/.main_reordered`
   → 243,425 pages, 999,988,851 bytes identical.
-- Sizes: see the design doc §3.3 / §3.4.
-- **Not done:** a packed comp9 `-e` smoke (`patches/exp/C4-combo/smoke.sh` style) with the residual as the order
-  block: self-extraction, `.main_reordered` identity inside the real binary, RSS at coder start. Required before a
-  full run. Slice mode never reads the order, so slice benches say nothing about this patch.
+- Smoke (packed comp9 `-e enwik9`, killed 1 min into coding): `.main_reordered`, `.ready4cmix`, `.dict` identical to
+  the record's -e run; RSS 5.53 GB at coder start (C4-like); the order decode peaks at about 0.4 GB and is released.
+- `enwik9_1M` 126,132 B (= C4), round trip OK (ledger `fx2T+C4+X3a-order-rule`). Slice mode never reads the order.
+- Compressor time +22 s (order decode), decompressor unchanged.
+- Not done: a full run. The decompressor's code path is untouched (it sorts pages by id).
