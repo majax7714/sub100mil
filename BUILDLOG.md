@@ -55,7 +55,15 @@ Newest entries first. One entry per session or experiment. Format:
     article order can segfault late in a full run. C3/C4 survive because the tracked id never goes negative in the current order.
 - **Estimate after this batch:** C4 about 99.75M → with X3a about 99.65M → with X3b about 99.62M (ESTIMATE). **Gap to the prize line
   about 200 KB.**
-- **Next:** fix the X2 drift (agent running, `patches/exp/C4-x2fix`). Then C5 = C4 + X3a + X2 fix (+ X3b if its time is cut). Leads, in
+- **X2 fix (`patches/exp/C4-x2fix`, commits 99215ad, 47af4d3):** bug confirmed in every detail (1,013 dropped deltas, drift +2,740,978; on
+  X3c's `A1_rec` the tracked id reaches −297 at record 50). A pending delta now survives a `restrictions>` line; `used_` index bounded at
+  both ends; numeric fields length-bounded. Measured, all round-trip OK: 10M / 1M / census 1M and five cold X2 proxies **unchanged**
+  (1,260,281 / 126,132 / 29,471); `A1_rec` exit 139 → 129,500; two warm analogues (3,000 pages + their redirects) −86 and −89 B
+  (0.70–0.78 bits per slot). One analogue pair fails `cmp` for both builds (slicetool, not the fix); in the ledger as failures. C3 got
+  about 0 of the redirect law's 7.4 KB at full scale (sim with the drifted bitmap 0.00 bits per slot; the dump agrees); **the fix
+  recovers about 7 KB of S (5–9 KB, ESTIMATE)**. Packed exe +96 B. Not verified: `-e` mode end to end with the fix (only
+  `fullstream_check` on the 586 MB stream), and the gain in a full run.
+- **Next:** C5 = C4 + X3a + X2 fix (+ X3b if its time is cut). Leads, in
   order: second-order update in the record's layer-1 final mixer (real 10M A/B); derive comp9's dictionary copy from enwik9 (12–50 KB
   est.); sort the five tail classes by page id (about 34 KB of order residual, changes the stream); X3b's three-stage stack.
 

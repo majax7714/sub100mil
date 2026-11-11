@@ -31,6 +31,7 @@ of the box. C4 (`patches/exp/C4-combo/launch.sh`, built, benched and smoke-teste
 full run is a later combo whose summed estimates clear the line with margin. Until then, evaluate with slices, proxies and offline sims
 against the C3 full-run cost dump. The gap was about 330 KB beyond C4; after batch 5 (X3a −95 KB measured, X3b about −35 KB) it is
 about 200 KB (ESTIMATE). Next combo: C5 = C4 + X3a + the X2 page-id fix (+ X3b if its 0.85 h is cut).
+The X2 fix is built (`patches/exp/C4-x2fix`: slices unchanged, round-trips OK, about −7 KB at full scale, ESTIMATE; removes a segfault under other article orders).
 - Notes for that run: C3 peaked at 9,044.4 MiB (9.48e9 B), about 16 MB under target; C4 adds about 6 MB. C3 took 43.7 h + 43.3 h contended.
 
 **First: mine the C3 full-run cost dump** (`build/exp/FULL/cost_full.bin`, 23.4 GB, 40 B per coded byte, the true coded cost of
