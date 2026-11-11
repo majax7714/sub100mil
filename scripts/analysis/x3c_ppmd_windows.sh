@@ -27,4 +27,5 @@ run2 "C100_w1024|--set bytes:rank:110000:100000000 --order rec --window 1024"
 run2 "B100_w4096|--set bytes:rank:60000:100000000 --order rec --window 4096" "D100_rec|--set bytes:rank:5000:100000000 --order rec"
 run2 "D100_w1024|--set bytes:rank:5000:100000000 --order rec --window 1024" "E100_rec|--set bytes:rank:140000:100000000 --order rec"
 run2 "E100_w1024|--set bytes:rank:140000:100000000 --order rec --window 1024" "C100_w256|--set bytes:rank:110000:100000000 --order rec --window 256"
+run2 "D100_w256|--set bytes:rank:5000:100000000 --order rec --window 256" "B100_w512|--set bytes:rank:60000:100000000 --order rec --window 512"
 echo chain-done
