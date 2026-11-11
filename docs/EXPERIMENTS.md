@@ -26,14 +26,13 @@ So slice gains on *transformer-side* mechanisms are roughly representative, but 
 
 ## Next session starts here (decided 2026-11-11)
 
-**First: launch the C4 full enwik9 run** with `patches/exp/C4-combo/launch.sh` (built, benched and smoke-tested 2026-11-09; not launched
-because the session that built it was long; see BUILDLOG 2026-11-11). It gives the first *measured* packed S. Expected (ESTIMATE): about
-99.75M, i.e. C3+P1's 99,886,519 minus about 140 KB (T1 about 72 KB, G1 about 84 KB, minus about 15 KB of exe growth).
-- Peak RAM: C3 measured 9,044.4 MiB (9.48e9 B) at full scale, under the 9.5e9 target by about 16 MB. C4 adds about 6 MB (T1). Watch it.
-- Time: C3 took 43.7 h compress and 43.3 h decompress on this box under contention. Keep the box quiet while it runs; offline sims are fine.
-- launch.sh refuses to start if `build/exp/FULL-C4` exists or the patches are uncommitted.
+**No full enwik9 run until the estimated S is under the prize line (99,420,425)** (user decision 2026-11-11). A full run costs about 5 days
+of the box. C4 (`patches/exp/C4-combo/launch.sh`, built, benched and smoke-tested 2026-11-09, about 99.75M ESTIMATE) stays parked. The next
+full run is a later combo whose summed estimates clear the line with margin. Until then, evaluate with slices, proxies and offline sims
+against the C3 full-run cost dump. The gap is about 330 KB beyond C4 (ESTIMATE).
+- Notes for that run: C3 peaked at 9,044.4 MiB (9.48e9 B), about 16 MB under target; C4 adds about 6 MB. C3 took 43.7 h + 43.3 h contended.
 
-**While it runs: mine the C3 full-run cost dump** (`build/exp/FULL/cost_full.bin`, 23.4 GB, 40 B per coded byte, the true coded cost of
+**First: mine the C3 full-run cost dump** (`build/exp/FULL/cost_full.bin`, 23.4 GB, 40 B per coded byte, the true coded cost of
 the C3 submission build over all 586M coded bytes, warm and reordered). First jobs:
 1. Split C3's full-scale gain: how much did E12 and X2 actually deliver vs their ~170 + 127 KB projections (compare their slots' costs
    with the record's model-alone costs in the dump, or re-sim their stages off)?
@@ -72,7 +71,7 @@ Size items left by P1 (exe, dict and weights count twice): drop `-fprofile-parti
 | G1 | **Gated linear network** as the last stage (after BITLSTM): 8 geometric-mixer neurons × 8 random half-space gates over model outputs and their disagreements, plus the BITLSTM delta as a gate feature | model addition (non-transformer, new predictor class) | about 1 µs per coded byte (≤0.5 h, an estimate), 80 KB RAM | All existing mixing is linear with context-selected weight sets; half-space gating learns piecewise mixing that converges fast online | **GO:** 10M −790 B (−843 with the gate feature, exact sim), 1M −93, census 1M −75; steady across the file. **Full ESTIMATE about 80 KB (50–90 KB)** (patches/exp/G1-gln) |
 | N1 | **Hidden-state continuous cache / kNN-LM** on the transformer's 192-d state, combined in logit space or after SSE | model addition (transformer-side) | 3.3 µs per byte at 32-d keys, W 8192 | The transformer adapts nothing online | **NO-GO** (attic/2026-11-07-N1-hcache): best in-budget −83 B on 10M vs the record's final model; 1.0–1.5 KB at the E2-head level shrinks ~10× to coded bytes. Revisit only with an ANN index over the whole history, or re-priced on the C3 full dump |
 | P1 | **Packaging:** own LZMA-style exe stub (p1cm) + regex-free E12, bit_head -O2, no unwind tables, rank-delta order stream, FX2TFWC3 weights container | size | ~0 runtime | Exe, dict and weights count twice in S; C3's exe had grown +243 KB (code, mostly std::regex, E12, E3, X2) | **C3 exe 612,760 → 193,384 packed; comp9 3,843,810 → 3,377,271 (51 KB under the official record's); S −913,717** vs −729,944 for UPX --ultra-brute --lzma alone. Archives identical on 1M (patches/exp/P1-packaging) |
-| C4 | **Combination** C3-full + T1 + G1 (with gate feature) + P1 packaging, all switches baked | combination | C3's + about 0.5 h, +6 MB | Fold batch 4 | **10M 1,260,281 (−1,419 vs C3, 104% of the sum)**; 1M 126,132; census 1M 29,471; packed exe 200,960, comp9 3,384,847. Full-mode smoke and full-stream check OK. **Next: full enwik9 run** (patches/exp/C4-combo/launch.sh) |
+| C4 | **Combination** C3-full + T1 + G1 (with gate feature) + P1 packaging, all switches baked | combination | C3's + about 0.5 h, +6 MB | Fold batch 4 | **10M 1,260,281 (−1,419 vs C3, 104% of the sum)**; 1M 126,132; census 1M 29,471; packed exe 200,960, comp9 3,384,847. Full-mode smoke and full-stream check OK. Full run parked until the estimate clears the prize line (patches/exp/C4-combo/launch.sh) |
 
 ## Shared tooling
 - **Per-byte cost instrument:** `patches/tools/per-byte-cost/` (README). It gives a 40 B record per coded byte: the record's cost,

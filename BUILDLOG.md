@@ -47,9 +47,9 @@ Newest entries first. One entry per session or experiment. Format:
   - Long-range copy inside an article is already caught by the transformer; across articles by the match models and PPMd (T1's in-article
     laws, N1). What's worth copying is what phda9's transforms moved *out of* the article's context.
   - Full mode can't be tested on a smaller file, and the archive is written only at the end, so every full run is 87+ h with no checkpoint.
-- **Next:** launch the C4 full run first (docs/EXPERIMENTS.md "Next session starts here"; left for a fresh session per the standing
-  preference), then mine the C3 cost dump: split E12/X2's real gains and re-price cold-slice NO-GOs on warm full-scale costs. The prize
-  line needs about 330 KB beyond C4 (ESTIMATE).
+- **Next:** no full run until the estimated S is under the prize line (user decision; C4 is parked, ready to launch). Mine the C3 cost dump:
+  split E12/X2's real gains and re-price cold-slice NO-GOs on warm full-scale costs. Then batch 5 against the dump. The prize line needs
+  about 330 KB beyond C4 (ESTIMATE).
 
 ## 2026-11-06: C2 and C3 folded; next session starts with the C3 full enwik9 run
 - **Type:** combination (plus tooling).

@@ -40,6 +40,9 @@ too. Record L = 100,424,672 bytes (Sep 2026). A prize needs S < 99,420,425.
   beat CM-side ones by about 5×, so the transformer is the *current* winning path. That's an observation, not a
   constraint. Keep at least one non-transformer mechanism (specialist models, retrieval, preprocessing, new
   predictor classes) in every batch.
+- **Full enwik9 runs wait for the prize line (2026-11-11).** A full run takes about 5 days of the box. Don't launch one until the summed
+  estimates put S under the prize line (99,420,425) with margin. Iterate on slices, proxies and offline sims against the latest full-run
+  cost dump in between.
 - **Third-party code** is fetched by script into gitignored `third_party/`, pinned to exact commits, and never
   vendored into the repo. Respect its license (most of the cmix lineage is GPL).
 
