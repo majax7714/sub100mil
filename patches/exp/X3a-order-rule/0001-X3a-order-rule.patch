@@ -1,0 +1,68 @@
+diff --git a/src/readalike_prepr/article_reorder.h b/src/readalike_prepr/article_reorder.h
+index ad9f48b..55d39e1 100644
+--- a/src/readalike_prepr/article_reorder.h
++++ b/src/readalike_prepr/article_reorder.h
+@@ -2,7 +2,7 @@
+ #define ARTICLE_REORDER_H 
+ 
+ 
+-#include "order_rankdelta.h"
++#include "order_rule.h"
+ #include <string.h>
+ #include <string>
+ #include <vector>
+@@ -94,46 +94,16 @@ void reorder() {
+     std::vector<int> positions;
+     std::vector<int> used(NUM_OF_ARTICLES, 0);
+     
+-    loadFile(".main");
+-
+-    // Article numbers need to be remapped (see article_remap.cpp).
+-    // Here we read enwik9 in order to generate the article number mapping.
+-    std::unordered_map<int, int> remap;
+-    std::ifstream infile(".main");
+-    std::string line;
+-    int count1 = -1, count2 = -1;
+-    bool redirect = false;
+-    std::vector<std::string> prefix = {
+-      "      <text xml:space=\"preserve\">#REDIRECT",
+-      "      <text xml:space=\"preserve\">#redirect",
+-      "      <text xml:space=\"preserve\">#Redirect",
+-      "      <text xml:space=\"preserve\">#REdirect",
+-      "      <text xml:space=\"preserve\">{{softredirect",};
+-    while (getline(infile, line)) {
+-      for (auto pre : prefix) {
+-        if (line.rfind(pre, 0) == 0) {
+-          redirect = true;
+-          break;
+-        }
+-      }
+-      if (line == "  <page>") {
+-        remap[count2] = count1;
+-        if (!redirect) {
+-          ++count2;
+-        }
+-        ++count1;
+-        redirect = false;
+-      }
++    // [sub100mil X3a] the order is rebuilt from .main by a content rule plus a residual (order_rule.h); the
++    // residual is comp9's order block. Decoded before the lines are loaded, so its memory is reused by them.
++    if (!ordrule::DecodeOrder(".main", ".new_article_order", positions)) {
++      fprintf(stderr, "order rule: residual does not fit .main\n");
++      exit(1);
+     }
++    for (int res : positions) used[res] = 1;
++
++    loadFile(".main");
+ 
+-    // [sub100mil P1] the order is stored as rank deltas (order_rankdelta.h), about 19 KB smaller once CM-coded
+-    std::ifstream infile2(".new_article_order");
+-    for (int id : DecodeRankDeltaOrder(infile2)) {
+-      int res = remap[id];  // Article numbers get remapped.
+-      positions.push_back(res);
+-      used[res] = 1;
+-    }
+-  
+     if (positions.size() < NUM_OF_ARTICLES) {
+         for (int i = 0; i < NUM_OF_ARTICLES; i++) {
+             if (used[i] == 0) {
