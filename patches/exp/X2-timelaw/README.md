@@ -68,6 +68,12 @@ matching the offline sims. Full-enwik9 projection (real-model numbers): **≈ 12
 
 ## Known limits
 
+- **Bug, fixed in `patches/exp/C4-x2fix` (2026-11-11):** `x2_timelaw.h` here (and so C3-combo, C3-full, C4-combo)
+  drops the page-id delta of every page with a `restrictions>` line (1,013 in the full run, drift +2,740,978), so the
+  rpid law ran on a drifted base in all 70,571 slots and gained about nothing in the C3 full run; and `try_rpid()`
+  reads `used_` at a negative index when the tracked id goes below −1 (segfault with other page orders). This
+  directory's files are left as they were built; use `patches/exp/C4-x2fix/0001-x2fix.patch` for anything new.
+
 - The rpid law under-performs its offline sim right after the article part (rank 175K proxy: 0.08 vs 1.01 bits per
-  slot warm); it's a 5–7 KB term.
+  slot warm); it's a 5–7 KB term. (That was the bug above: fixed, the same proxy gives 1.00.)
 - Not tested end to end in -e mode (enwik9-only pipeline); it rides on E12's planned full-mode run.
