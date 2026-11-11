@@ -39,7 +39,14 @@ dictionary-trained build (the no-dictionary training's extra 74 KB was PGO: part
 | **P1 full** (`build_c3full_p1.sh`: + regex-free E12, bit_head -O2, no unwind tables, rank-delta order, FX2TFWC3) | **193,384** | **3,377,271** | **−913,717** |
 
 S counts exe, dict and weights twice and the order once. P1 full is 183,773 B of S better than UPX alone, and its
-comp9 is 51,203 B smaller than the official record's (3,428,474). Its CM-coded dictionary stream is byte-identical to
+comp9 is 51,203 B smaller than the official record's (3,428,474).
+
+**Verified (fast lane, ledger rows `fx2T+C3-P1-*`):** every packed/shrunk build round-trips and its archive is
+byte-identical (cmp) to the C3 control: enwik9_1M 126,244 B (unpacked, upx, p1 stub, P1 final, C3-full+P1; the
+C3-full+P1 archive also equals C3-full's own `identity/clean/comp.bin`) and enwik9_mid1M_pa 29,759 B (C3 control,
+P1 final, C3-full+P1). Speed: instruction counts were not completed (perf_cmp.sh failed on a relative path after the
+first binary); contended wall times of the packed builds are not slower than the control (1M comp 230-264 s vs 308 s).
+Rebuilding the stub with the current p1cm.h (no .data) saves another ~64 B. Its CM-coded dictionary stream is byte-identical to
 C3-full's (`comp_dict`), the order stream equals the one C3 makes from the rank-delta file.
 
 ## 1. Size breakdown of C3's comp9 (unpacked, g++15)
