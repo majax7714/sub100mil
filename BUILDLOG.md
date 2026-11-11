@@ -12,6 +12,45 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-07 to 2026-11-11: first full enwik9 run (C3) round-trips; S 99,886,519 with P1 packing; batch 4 (T1 GO, G1 GO, N1 NO-GO, P1); C4 built
+- **Type:** milestone run (combination C3) + batch 4: T1 model addition (non-transformer specialist), G1 model addition (non-transformer, new
+  predictor class), N1 model addition (transformer-side), P1 packaging; C4 combination.
+- **Did:**
+  - **C3-full** (patches/exp/C3-full): every env switch baked as a compile-time default (the build fails on any leftover getenv); E12/X2 read
+    the embedded `.dict`; PGO trained with the dictionary (exe 686,456 → 612,760). Cost-log twin byte-identical to the clean build; logged costs
+    equal the coder's output within 2 B. Full mode is enwik9-only, so the pre-launch check was a 15-min `-e` smoke plus E12/X2 run standalone
+    over the real 586 MB coded stream. Launched 2026-11-07 13:27: compress with the cost-log twin, decompress with the clean submission binary.
+  - **Batch 4** (run beside the full run): T1, G1, N1, P1 (details in docs/EXPERIMENTS.md rows). **C4** = C3-full + T1 + G1 (+ BITLSTM-delta
+    gate feature) + P1, all baked; T1 now shares X2's WRT decoder (`wrt_dec.h`, exact, −4.6 MB RAM). launch.sh written, not run.
+- **Numbers (all round-trip OK):**
+  - **C3 full enwik9:** archive9 **96,956,426 B** (payload 93,313,109; 0.7757 bpb), comp9 3,843,810 unpacked, **S 100,800,236** (+375,564 vs
+    the record). Peak RSS **9,044.4 MiB = 9.48e9 B** (under the 9.5e9 target by about 16 MB). Wall 43.7 h compress, 43.3 h decompress,
+    contended (not usable for the time budget). Cost dump `build/exp/FULL/cost_full.bin`, 23.4 GB.
+  - **With P1 packing: S = 99,886,519, −538,153 (−0.536%) vs the record. First sub-100M S (derived):** P1's comp9 is 3,377,271 and
+    S changes by 2×(Δexe + Δweights) + Δorder = −913,717; the archive is unchanged (the clean unpacked C3-full and P1 builds give byte-identical archives on 1M and census 1M, and a 73.3M-test differential check of the regex-free E12 found 0 mismatches; C4's
+    smoke shows its order stream decodes to a byte-identical `.main_reordered`). A packed end-to-end full run (C4) will measure it directly.
+  - **P1:** the +243 KB exe growth was code (std::regex in E12 +71 KB, E12 +46 KB, E3 +34 KB, X2 +17 KB, …), not tables or PGO. UPX
+    --ultra-brute --lzma alone: S −729,944; P1's own stub + source trims + rank-delta order + FX2TFWC3: S −913,717; comp9 51 KB under the
+    official record's.
+  - **T1:** 10M 1,261,700 → 1,261,120 (−580; sim −586); interwiki proxy −1,059 (−3.13%); 1M −10. Full ESTIMATE about 72 KB (48–90).
+  - **G1:** 10M → 1,260,910 (−790; sim −801); 1M −93; census 1M −75. Full ESTIMATE about 80 KB (50–90). Gate feature −843 in exact sim.
+  - **N1:** NO-GO offline: best in-budget −83 B on 10M vs the record's final model (bar 300 B).
+  - **C4:** 10M **1,260,281 (−1,419 vs C3, 104% of the sum)**; 1M 126,132; census 1M 29,471 (T1 also gains about −210 on census); proxy
+    32,731. Packed exe 200,960, comp9 3,384,847. Extra RAM vs C3 about 6 MB.
+  - Ledger rows added: about 25 (agents' slice runs plus the full run).
+- **Learned:**
+  - **Our sub-100M came as much from packaging as from models.** The model gains in C3 are worth about −0.4 to −0.5 MB at full scale. The
+    exe growth that paid for them would have given back about +0.49 MB at our unpacked size, because the exe counts twice. Watch exe bytes
+    for every addition.
+  - Batch 4 is the first batch where the transformer-side dart lost and both non-transformer darts won. Structure the record can't see
+    (an interlanguage block cut off from its article) and better mixing are where the cheap gains are now.
+  - Long-range copy inside an article is already caught by the transformer; across articles by the match models and PPMd (T1's in-article
+    laws, N1). What's worth copying is what phda9's transforms moved *out of* the article's context.
+  - Full mode can't be tested on a smaller file, and the archive is written only at the end, so every full run is 87+ h with no checkpoint.
+- **Next:** launch the C4 full run first (docs/EXPERIMENTS.md "Next session starts here"; left for a fresh session per the standing
+  preference), then mine the C3 cost dump: split E12/X2's real gains and re-price cold-slice NO-GOs on warm full-scale costs. The prize
+  line needs about 330 KB beyond C4 (ESTIMATE).
+
 ## 2026-11-06: C2 and C3 folded; next session starts with the C3 full enwik9 run
 - **Type:** combination (plus tooling).
 - **Did:**

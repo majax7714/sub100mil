@@ -24,30 +24,25 @@ dead ends go to the attic.
 
 So slice gains on *transformer-side* mechanisms are roughly representative, but CM-side gains can mislead. Confirm promising results with a full enwik9 run (CPU time is free; one run takes about 30+ h per direction).
 
-## Next session starts here (decided 2026-11-06)
+## Next session starts here (decided 2026-11-11)
 
-**First: the C3 full enwik9 run, with the per-byte cost log on.** Don't queue more 100M checks first. The two biggest wins (E12, X2) live almost
-entirely in census articles and the metadata block, which slices barely contain, so only a full run tests them. A full-scale cost dump of C3
-also makes the run reusable: future specialists can be simulated offline against real warm full-file costs (E12's sims matched the real build
-to 0.3%, X2's to 1 B), so we don't rerun 30 h per idea, only at milestones.
+**First: launch the C4 full enwik9 run** with `patches/exp/C4-combo/launch.sh` (built, benched and smoke-tested 2026-11-09; not launched
+because the session that built it was long; see BUILDLOG 2026-11-11). It gives the first *measured* packed S. Expected (ESTIMATE): about
+99.75M, i.e. C3+P1's 99,886,519 minus about 140 KB (T1 about 72 KB, G1 about 84 KB, minus about 15 KB of exe growth).
+- Peak RAM: C3 measured 9,044.4 MiB (9.48e9 B) at full scale, under the 9.5e9 target by about 16 MB. C4 adds about 6 MB (T1). Watch it.
+- Time: C3 took 43.7 h compress and 43.3 h decompress on this box under contention. Keep the box quiet while it runs; offline sims are fine.
+- launch.sh refuses to start if `build/exp/FULL-C4` exists or the patches are uncommitted.
 
-What the run must answer: actual S; peak RSS against the 10 GB limit (the record peaks at 9.66 GB, and C3 adds about 20 MB plus PPMd growth);
-whether E12 + X2 deliver their projected ~300 KB (170 + 127 KB) against the warm, reordered full-run CM.
+**While it runs: mine the C3 full-run cost dump** (`build/exp/FULL/cost_full.bin`, 23.4 GB, 40 B per coded byte, the true coded cost of
+the C3 submission build over all 586M coded bytes, warm and reordered). First jobs:
+1. Split C3's full-scale gain: how much did E12 and X2 actually deliver vs their ~170 + 127 KB projections (compare their slots' costs
+   with the record's model-alone costs in the dump, or re-sim their stages off)?
+2. Re-price the NO-GO ideas that were judged on cold slices against the warm full-run costs (E11 in-article cache, N1, X1 couplings).
+3. Find where the bits go at full scale (`scripts/analysis/a1_analyze.py`): which content classes hold the most bits now. The prize line
+   (99,420,425) is about 330 KB beyond C4; that needs a new mechanism, not tuning.
+Then batch 5: several cheap, diverse mechanisms, at least two non-transformer, priced against the full-run dump first.
 
-Steps:
-1. (Done 2026-11-06: C2 100M 11,980,914, −0.212% vs record, round-trip OK. C2/C3 cost is about 40.5 h per direction, an estimate.)
-2. Build a full-mode harness (none exists yet; `slice_cmd.sh` is slice-only): the record's `-e`/`archive9` path with the C3 binary, plus the
-   per-byte cost patch (`patches/tools/per-byte-cost/`) stacked on C3.
-   - **The runtime switches must be baked in.** The submission can't depend on env vars or external files. The E2/E3/E12/X2 env settings
-     become compile-time defaults, and E12/X2 read the embedded dictionary (`.dict` in the cwd in full mode; see patches/exp/E12-arith/README.md
-     "Known limits").
-   - Rebuild comp9 with UPX and measure the decompressor size for S.
-3. Run compress then decompress in one main-lane slot with `BENCH_TMP` on disk (PPMd's `ppm.temp` is about 14 GB), using
-   `/usr/bin/time -v`, and `cmp` against `data/raw/enwik9`. The cost dump is about 40 B per coded byte, about 23 GB. Expect 60+ h of
-   contended wall time; timings aren't usable for the time budget (use the perf-based estimates).
-4. While it runs, use the other main slot and the fast lane for **batch 4**: several cheap, diverse, off-plan mechanisms, at least two
-   non-transformer. Skip 100M checks unless the change is transformer-side. Pending small items: X2's 30K warm-record proxy (doc §9), and a
-   size-optimized X2/E12 build.
+Size items left by P1 (exe, dict and weights count twice): drop `-fprofile-partial-training` with a PGO run that covers the transformer path (about −44 KB of S, measured as size only; the archive may change, so it needs its own round-trip); rewrite E12/E3/X2 data structures (their code is about +57 KB packed per copy). The batch-3 S estimates for E12/X2 (+3/+2 KB) left out code cost; count packed exe bytes ×2 for every new addition.
 
 ## Candidates
 
@@ -59,7 +54,7 @@ Steps:
 | E4 | **Prune or merge the 23 mixers** to buy time | speed | frees up to 16% of time | lexth11c: −10% time for +0.024% size | proposed |
 | E5 | **Software prefetch** for the CM side's DRAM misses | speed | ~0 | The CM side is DRAM-latency bound. In neif, `Mixer1::p1` causes 26% of misses | proposed |
 | E6 | Shrink the transformer's **L3 footprint** (int4 kept packed in cache) | speed / robustness | engineering | Protects against the 12 MB-L3 Intel test box (neif took 82.9 h there) | proposed |
-| E7 | **Packaging:** UPX/stub, container format, dead-neuron removal | size | ~0 runtime | about −0.3 MB of S estimated across neif's packaging items. Our comp9 is +173 KB vs official from UPX alone | proposed |
+| E7 | **Packaging:** UPX/stub, container format, dead-neuron removal | size | ~0 runtime | about −0.3 MB of S estimated across neif's packaging items. Our comp9 is +173 KB vs official from UPX alone | **done as P1** (see P1 row) |
 | E8 | **clang build** (needs `clang17`) | speed | ~0 | The agent estimates 8–15% faster kernels | proposed |
 | A1 | **Architectural bet:** a stronger long-range match/retrieval model over the file itself (templates, repeated phrases), fed to the mixers | architectural | TBD | Deterministic, CPU-only, no training. enwik9 is highly repetitive | **NO-GO** (attic/2026-11-05-A1-retrieval). Realistic gain about 10–20 KB |
 | E9 | **Bug fix:** the record feeds fxcm output slot 430 (a constant 0.5) as fxcm's final prediction into layer 1 and `auxiliary_context_`. The real final is slot 428 | bug fix | ~0 | Found by A1's per-byte instrument | **neutral:** 10M +6 B. fxcm's final already reached the layer-0 mixers, so nothing missed it. Kept in C1 at no cost (patches/exp/E9-fxcm-final) |
@@ -72,7 +67,12 @@ Steps:
 | X1 | **Cross-domain synthesis:** 25 mechanisms from physics, biology and chemistry mapped to bytes; tested Potts/DCA token couplings within an article and coarse-grained state as a final context | model addition (non-transformer), offline | about 6–7 µs per byte, 0.6–1.2 GB (over the RAM headroom) | A deliberate long shot from outside CS | **NO-GO** (attic/2026-11-06-X1-cross-domain): couplings +0.03% on 10M over a warm control, about 35 KB (10–60 KB) projected; coarse state ≤ 28 B. The survey table is in docs/design/X1-cross-domain.md |
 | X2 | **Cross-domain round 2** (fields X1 skipped + domain laws as computation). Hit: **metadata time law**: revision ids are time-ordered, so each page's timestamp in phda9's metadata block is predictable from its revision id (stratigraphy analogy); plus a redirect page-id law | model addition (non-transformer specialist) | seconds of CPU, <20 MB, about 2 KB of S | E12's lesson: the record is blind to computation, wherever the structure lives | **GO, real build round-trips** (patches/exp/X2-timelaw, final stage after E12): proxies −534/−554/−1,046 B over E12 per MB, equal to the sim within 1 B. 154,990 slots at 10.8–15.7 bits; reordered-block proxies +1.1 to 2.3 KB per MB; **full enwik9 ESTIMATE about 127 KB (85–135 KB)**. Text laws (ISBN, chronology, …) NO-GO, about 14 KB (attic/2026-11-06-X2-text-laws). Next: fold into C2, 30K warm proxy |
 | C2 | **Combination** C1 + E2 logit LR ×0.5 + E12 (lr 0.004) | combination | C1's cost + about 0.2 h | Fold the batch-3 wins | **10M 1,261,828 (−2,854 vs record)**; census 10M slice 323,802 (−4.20%); **100M 11,980,914 (−25,409, −0.212% vs record; −7,435 vs E2 alone)**; about 40.5 h per direction (ESTIMATE), +20 MiB (patches/exp/C2-combo) |
-| C3 | **Combination** C2 + X2 metadata time law | combination | C2's + seconds | Fold X2 | **current best: 10M 1,261,700 (−2,982, −0.236% vs record)**; 1M 126,244; X2 proxy r130K: C2 25,219 → C3 24,175 (−1,044, same as on the record alone). **Next: full enwik9 run** (see top) (patches/exp/C3-combo) |
+| C3 | **Combination** C2 + X2 metadata time law | combination | C2's + seconds | Fold X2 | **full enwik9, round-trip OK (2026-11-11):** archive9 96,956,426 B (payload 93,313,109), S 100,800,236 with the unpacked comp9 (3,843,810); **with P1 packing S = 99,886,519 (−538,153 vs the record, derived: P1 comp9 3,377,271, see P1 row)**. Peak RSS 9,044.4 MiB; 43.7 h comp / 43.3 h decomp contended. 10M 1,261,700 (patches/exp/C3-combo, patches/exp/C3-full) |
+| T1 | **Intra-article field-copy laws.** Hit: phda9 moves each article's trailing interlanguage links into a block after the metadata; the k-th page without `</text>` owns the k-th group, so each link title can be offered the owning page's title | model addition (non-transformer specialist) | 0.04 µs per coded byte, 19 MB, +16 KB exe unpacked | 48,820 links equal the English title and the record pays about 13 bits each, because nothing in that block sees the article | **GO:** 10M −580 B (sim −586), interwiki proxy −1,059 (−3.13%), census about −210 in C4. **Full ESTIMATE about 72 KB (48–90 KB).** In-article laws (birth years, sort keys, bold title, redirects, census categories) NO-GO, about 37 KB at stake and already copied (docs/design/T1-fieldcopy.md, patches/exp/T1-fieldcopy) |
+| G1 | **Gated linear network** as the last stage (after BITLSTM): 8 geometric-mixer neurons × 8 random half-space gates over model outputs and their disagreements, plus the BITLSTM delta as a gate feature | model addition (non-transformer, new predictor class) | about 1 µs per coded byte (≤0.5 h, an estimate), 80 KB RAM | All existing mixing is linear with context-selected weight sets; half-space gating learns piecewise mixing that converges fast online | **GO:** 10M −790 B (−843 with the gate feature, exact sim), 1M −93, census 1M −75; steady across the file. **Full ESTIMATE about 80 KB (50–90 KB)** (patches/exp/G1-gln) |
+| N1 | **Hidden-state continuous cache / kNN-LM** on the transformer's 192-d state, combined in logit space or after SSE | model addition (transformer-side) | 3.3 µs per byte at 32-d keys, W 8192 | The transformer adapts nothing online | **NO-GO** (attic/2026-11-07-N1-hcache): best in-budget −83 B on 10M vs the record's final model; 1.0–1.5 KB at the E2-head level shrinks ~10× to coded bytes. Revisit only with an ANN index over the whole history, or re-priced on the C3 full dump |
+| P1 | **Packaging:** own LZMA-style exe stub (p1cm) + regex-free E12, bit_head -O2, no unwind tables, rank-delta order stream, FX2TFWC3 weights container | size | ~0 runtime | Exe, dict and weights count twice in S; C3's exe had grown +243 KB (code, mostly std::regex, E12, E3, X2) | **C3 exe 612,760 → 193,384 packed; comp9 3,843,810 → 3,377,271 (51 KB under the official record's); S −913,717** vs −729,944 for UPX --ultra-brute --lzma alone. Archives identical on 1M (patches/exp/P1-packaging) |
+| C4 | **Combination** C3-full + T1 + G1 (with gate feature) + P1 packaging, all switches baked | combination | C3's + about 0.5 h, +6 MB | Fold batch 4 | **10M 1,260,281 (−1,419 vs C3, 104% of the sum)**; 1M 126,132; census 1M 29,471; packed exe 200,960, comp9 3,384,847. Full-mode smoke and full-stream check OK. **Next: full enwik9 run** (patches/exp/C4-combo/launch.sh) |
 
 ## Shared tooling
 - **Per-byte cost instrument:** `patches/tools/per-byte-cost/` (README). It gives a 40 B record per coded byte: the record's cost,
