@@ -8,11 +8,12 @@ each, all under the bar. The hit is not in the archive at all. It is **comp9's a
 what we still need)**: the order file is not an arbitrary permutation but the output of a documented pipeline
 (embedding → 1-D t-SNE → k-means on the axis → descending article number inside a cluster → a stable sort that moves
 five page classes to the end), so it can be shipped as a **content rule plus a residual**. Built and checked here:
-the rule and a residual of about 75 KB once CM-coded (§3.3) reproduce the real `.main_reordered` (999,988,851 B) **byte for byte**, so the
+the rule and a residual of 76,846 B once CM-coded (§3.3) reproduce the real `.main_reordered` (999,988,851 B) **byte for byte**, so the
 coded stream and the archive do not change and no full run is needed to price it.
 
-**S effect [ESTIMATE]: order block 181,132 → about 75 KB (−106 KB; 80,625 B is measured for an earlier variant of the
-rule), exe about +3 to +6 KB packed per copy, counted twice. Net about −97 KB of S, range −88 to −101 KB.** No change to
+**S effect: order block 181,132 → 76,846 B, −104,286 B [M] (about 75 KB with the class-by-class layout of the patch
+[ESTIMATE]); exe about +3 to +6 KB packed per copy, counted twice [ESTIMATE]. Net about −97 KB of S, range −92 to
+−100 KB.** No change to
 the archive, to RAM at the coding peak, or to the decompressor's time; +20–55 s in the compressor.
 
 Classification: **size / packaging (compressor side-information), non-transformer.** The idea of an order rule plus
@@ -62,7 +63,7 @@ Where the bits of the non-article parts are [M]: main stream 90,535 KB; metadata
 
 | # | candidate (provenance law) | slots (full) | C3 pays per slot | **bits at stake** | removable | status |
 |---|---|---:|---:|---:|---|---|
-| 1 | **comp9 order block = rule(text) + residual** (the order file was made by a deterministic pipeline, §3) | 172,277 articles | 8.41 bits | **181.1 KB** (×1 in S) | ≈ 59% (→ ≈ 75 KB; 80,625 B measured for an earlier variant) | **GO, built (§3)** |
+| 1 | **comp9 order block = rule(text) + residual** (the order file was made by a deterministic pipeline, §3) | 172,277 articles | 8.41 bits | **181.1 KB** (×1 in S) | 58% removed: **76,846 B [M]** | **GO, built (§3)** |
 | 2 | comp9's dictionary copy derived from enwik9 (word set = frequent words; only the order needs hints) | 44,515 words | 17.9 bits | 99.9 KB (×1: the compressor's copy) | set membership costs 10.0 KB, the order ≤ 77.9 KB as a plain permutation [M]; neif ships 8.4 bits/word | untested lead, 12–50 KB [ESTIMATE] |
 | 3 | order: sort the five tail classes by page id instead (neif's modification) | 58,352 articles | 4.3 bits of residual | ≈ 31.5 KB of residual + ≈ 2.7 KB header | all, but **the stream changes** | untested lead (§3.4) |
 | 4 | metadata: revision id of pages edited after the 2005 renumbering, from pages with the same edit comment | 155,031 | 22.5 bits | 436.3 KB | 24.0 KB UPPER BOUND (61,821 slots have an exact-comment predecessor; only 12,840 within 100 ids) | NO-GO |
@@ -181,11 +182,11 @@ No axis smoothing costs +7.4 KB; lead of 1,200 or 4,000 characters, other normal
 | P1 rank-delta list (`new_article_order.rd`), the C4 order block | 742,217 | **181,132** | [M] reproduces C4's `comp_order` exactly, so the method is the build's |
 | residual, earlier variant (any df, last 64 postings, no classes), text | 396,804 | **80,625** | [M] order-0 estimate + header was 78,560 + ≈ 5,050 |
 | same, LEB128 varints instead of text | 185,093 | 80,791 | [M] text is the better container for this CM |
-| residual, chosen rule (classes), symbols in page order | 393,027 | ≈ 76.7 KB | [ESTIMATE] from the row above and the order-0 difference (−3,962 B); xz -9e 95,520 |
-| **residual, chosen rule, symbols stored class by class (the patch)** | 393,027 | **≈ 75 KB (74–78 KB)** | [ESTIMATE] per-class order-0 −2.2 KB, xz -9e 93,656 (−1,864); CM run queued, see below |
+| residual, chosen rule (classes), symbols in page order | 393,027 | **76,846** | [M] (the order-0 difference to the row above predicted 76,663); xz -9e 95,520 |
+| **residual, chosen rule, symbols stored class by class (the patch)** | 393,027 | **≈ 75.0 KB (74.5–76.8 KB)** | [ESTIMATE] per-class order-0 −2.2 KB, xz -9e 93,656 (−1,864); CM run queued, see below |
 
-The two CM runs for the last rows were still waiting for a fast-lane slot when this was written (ten jobs of the three
-parallel agents in the lane); `build.sh` produces the number as `comp_order` (`build/exp/X3a/c4x/bin/comp9.parts`).
+The CM run for the last row was still waiting for a fast-lane slot when this was written (the lane was shared by
+three parallel agents); `build.sh` produces the number as `comp_order` (`build/exp/X3a/c4x/bin/comp9.parts`).
 
 - Time: 54 s for encode + verify (build time), **21.6 s for the decode** the compressor runs, single core, contended
   [M]. Peak RSS of the decode 402 MB [M], transient and before the model is allocated; in the patch it runs before
@@ -195,14 +196,14 @@ parallel agents in the lane); `build.sh` produces the number as `comp_order` (`b
 
 | item | effect on S | |
 |---|---:|---|
-| order block, 181,132 → ≈ 75 KB | **≈ −106 KB** (×1) | [ESTIMATE] until the queued CM run; −100.5 KB is measured for the earlier variant |
+| order block, 181,132 → 76,846 B (≈ 75.0 KB class by class) | **−104.3 KB** [M] (≈ −106 KB) | measured for the page-order layout; the class-by-class layout is an estimate until its CM run |
 | exe: `order_rule.h` in, the remap loop and P1's rank-delta reader out | **+6 to +12 KB** (2 copies × 3–6 KB packed) | [ESTIMATE] the header alone compiles to 19.5 KB (-Os) – 23.0 KB (-O3 with the cold attributes) of text; C4's exe packs at 0.37 and T1 + G1 added 24.6 KB raw for 7.6 KB packed. The PGO build that measures it (`build.sh`) was queued behind the other agents' 10M benches |
 | archive9 | 0 | [M] `.main_reordered` identical |
 | RAM at the coding peak | 0 expected | 402 MB transient during preprocessing; RSS at coder start to be read in the smoke |
 | time | +22 s compress, 0 decompress | [M] contended |
-| **net** | **≈ −97 KB, range −88 to −101 KB** | [ESTIMATE] |
+| **net** | **≈ −97 KB, range −92 to −100 KB** | [ESTIMATE]: block measured, exe estimated |
 
-The range: low end = 78 KB block and +6 KB per exe copy; high end = 74 KB block and +3 KB per copy. Nothing here
+The range: low end = the measured 76,846 B block and +6 KB per exe copy; high end = a 75 KB block and +3 KB per copy. Nothing here
 depends on a full run: the block is a file we build, and the stream is unchanged.
 
 **Relation to X3c** (running in parallel): X3c tests *changing* the order (id-sorted windows) to shrink the order block
@@ -229,6 +230,6 @@ style, about 15 minutes in a main slot) has to be run before a full run. Slice b
 
 | | |
 |---|---|
-| **GO: order rule + residual** | about −97 KB of S (−88 to −101 KB) [ESTIMATE]; exactness measured; packed-exe size and comp9 smoke pending |
+| **GO: order rule + residual** | about −97 KB of S (−92 to −100 KB): order block −104,286 B measured, exe +6 to +12 KB estimated; exactness measured; packed-exe size and comp9 smoke pending |
 | NO-GO: metadata, redirect, comment, interlanguage and bot-table laws (rows 4–21) | about 60 KB of oracle-gated gain in 14 pieces, the largest 24 KB; attic/2026-11-11-X3a-provenance-laws |
 | best untested lead | the dictionary copy in comp9 (row 2: 99.9 KB at stake, word set derivable for 10 KB) and the tail-class order (row 3) |
