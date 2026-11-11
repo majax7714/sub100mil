@@ -12,6 +12,53 @@ Newest entries first. One entry per session or experiment. Format:
 
 ---
 
+## 2026-11-11: Batch 5 = cross-domain round 3 (X3a order rule GO −95 KB measured, X3b EKF combiner small GO, X3c arrangement NO-GO); X2 page-id bug found
+- **Type:** X3a packaging / preprocessing side information (provenance lens); X3b model addition (non-transformer, new combiner class);
+  X3c architectural (arrangement of the stream), offline. Three parallel cross-domain darts, each priced on the C3 full-run cost dump first.
+- **Did:**
+  - **X3a, provenance** (digital forensics, stemmatics, database theory; docs/design/X3a-provenance.md): 22 candidates counted on the full
+    dump. Hit: fx2's article order was produced by a documented pipeline (embedding → 1-D t-SNE → k-means → descending article number per
+    cluster → five page classes moved to the end), so comp9 can ship a content rule plus a residual instead of the order itself. Same
+    idea as cmix-neif's, implemented independently for the unmodified fx2 order, so the coded stream and archive don't change
+    (`patches/exp/X3a-order-rule`).
+  - **X3b, forecast combination** (meteorology, econometrics, sensor fusion; docs/design/X3b-forecast-combination.md): 22 candidates;
+    calibration and regime diagnostics on the full dump; sims on the G1 stage dumps; real build of an extended Kalman filter (covariance-aware
+    logistic regression over 33 final-stage inputs) after G1 (`patches/exp/X3b-ekf`).
+  - **X3c, arrangement** (seriation, genome assembly, matrix reordering, curriculum; docs/design/X3c-arrangement.md): 18 candidates;
+    order-sensitivity measurements, a PPMD-only proxy for reorders, windowed id-sort orders.
+- **Numbers:**
+  - **X3a (measured, no projection):** `comp_order` 181,132 → 74,675 B (counted once); packed exe 200,960 → 206,560 (counted twice);
+    comp9 3,384,847 → 3,283,990; **S −95,257 B vs C4**. Rule + residual reproduce `.main_reordered` (999,988,851 B) byte for byte, offline and
+    inside the packed comp9 in a `-e enwik9` smoke (`.ready4cmix` and `.dict` identical too). 1M 126,132 (= C4), round-trip OK. +22 s
+    compress, 0 decompress; order decode peaks about 0.4 GB during preprocessing, then freed. Not verified: a full run; RSS vs C4 only on
+    one-minute samples. All 14 stream-side provenance laws NO-GO (about 60 KB of oracle-gated gain in total). At full scale X2's
+    timestamp slots cost 4.85 bits, so X2 delivers as projected.
+  - **X3b (measured, all round-trip OK):** 10M 1,260,281 → **1,259,519 (−762 vs C4, sim −762.0)**; 1M 125,952 (−180); census 1M 29,355
+    (−116). **Full ESTIMATE about −35 KB (15–55 KB)** net of exe; the gain is front-loaded and was still shrinking at the end of both
+    slices, and no full-run dump of the final stage's inputs exists to check it. Cost: +1,312 B packed exe (×2), 9.3 KB RAM, 3.5 µs per
+    coded byte ≈ 0.85 h per direction on the reference machine (ESTIMATE, unoptimized). Sim only: EKF → 2-D reliability APM → second GLN
+    −1,008 on 10M (45–70 KB ESTIMATE). Diagnostics: global hindsight miscalibration of C3 is 18.9 KB; best context set −11.8 KB causal on
+    C3 but all recalibrations lose 20–79 B on top of C4; no latent winner regime; expert errors 0.98–0.99 correlated.
+  - **X3c (ESTIMATES unless marked):** transformer-alone minus final over the C3 dump = 3,079,208 B (measured). The transformer is
+    order-sensitive through its PPMD prior (same 1,324 articles 12.4% cheaper warm than cold; Δfinal = 0.46 × ΔPPMD-alone, r 0.984). The
+    reorder costs about 397 KB (181 KB order + about 216 KB of page-id deltas) and earns more: identity order loses 540–930 KB;
+    text-overlap seriation +0.03 to +0.48% on PPMD text. Lead K2 (id-sort inside 256–1024-article windows) about 45 KB (−25 to +85), about
+    zero once X3a's rule is in. Not verified: identity order at full scale, K2 on real text (full PPMD-only runs stalled the box).
+  - Ledger rows added: X3a 1, X3b 3, X3c 11 (6 round-trip OK, 5 failed: 2 segfaults from the X2 bug, 3 OOM from over-subscription).
+- **Learned:**
+  - The third round's win is again structure produced by a program: this time the record's own tooling. The order block was the largest
+    remaining "computed, but shipped as data" item in comp9; the dictionary copy (99.9 KB) is the next one.
+  - The back end is close to calibrated; what is left in mixing is second-order (collinear inputs under first-order SGD), not context.
+  - The article order is right for this stack above about 1K articles; arrangement is closed as a source of 100 KB.
+  - **Bug in X2 (`x2_timelaw.h`), found by X3c:** the page-id delta of pages with `<restrictions>` is dropped (1,013 pages, final drift
+    +2,740,978), so the redirect page-id law runs on a wrong base, and `try_rpid()` indexes `used_` with no lower bound. A different
+    article order can segfault late in a full run. C3/C4 survive because the tracked id never goes negative in the current order.
+- **Estimate after this batch:** C4 about 99.75M → with X3a about 99.65M → with X3b about 99.62M (ESTIMATE). **Gap to the prize line
+  about 200 KB.**
+- **Next:** fix the X2 drift (agent running, `patches/exp/C4-x2fix`). Then C5 = C4 + X3a + X2 fix (+ X3b if its time is cut). Leads, in
+  order: second-order update in the record's layer-1 final mixer (real 10M A/B); derive comp9's dictionary copy from enwik9 (12–50 KB
+  est.); sort the five tail classes by page id (about 34 KB of order residual, changes the stream); X3b's three-stage stack.
+
 ## 2026-11-07 to 2026-11-11: first full enwik9 run (C3) round-trips; S 99,886,519 with P1 packing; batch 4 (T1 GO, G1 GO, N1 NO-GO, P1); C4 built
 - **Type:** milestone run (combination C3) + batch 4: T1 model addition (non-transformer specialist), G1 model addition (non-transformer, new
   predictor class), N1 model addition (transformer-side), P1 packaging; C4 combination.
