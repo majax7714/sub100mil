@@ -1,0 +1,56 @@
+--- a/src/predictor.cpp
++++ b/src/predictor.cpp
+@@ -268,6 +268,8 @@
+       fprintf(stderr, "T1: interlanguage field copy on (%s, coded block header %d)\n", d, (int)options.e12_coded_block_header);
+       g1::Config gc;
+       g1_ = std::make_unique<g1::Gln>(gc);
++      x3b_ = std::make_unique<x3b::Ekf>();  // [X3b]
++      fprintf(stderr, "X3b: EKF combiner on (K %d p0 %g q %g)\n", x3b::K, x3b_->p0, x3b_->q);
+       fprintf(stderr, "G1: GLN final stage on (n %d k %d lr %g lrmin %g bscale %g seed %d tau %g, z3 = BITLSTM delta)\n",
+               gc.n, gc.k, gc.lr, gc.lrmin, gc.bscale, gc.seed, gc.tau);
+     }
+@@ -708,7 +710,16 @@
+   float X[g1::KX], Z[g1::ZD];
+   g1::Features(&layers_[1].Inputs()[0], (int)mixer_0_.size(), bitl_m1raw_, g1_psse_, g1_pfin_,
+                g1::Stretch(q / 65536.0f), (int)e1_cb_, X, Z);
+-  const float p = g1_->Squash(g1_->Predict(X, Z));
++  float gl = g1_->Predict(X, Z);
++  float p = g1_->Squash(gl);
++  if (x3b_) {  // [X3b] covariance-aware (EKF) combiner on top of G1
++    if (gl > 12) gl = 12;
++    if (gl < -12) gl = -12;
++    x3b::Ekf::Features(&layers_[1].Inputs()[0], gl, bitl_m1raw_, g1::Stretch(g1_psse_), g1::Stretch(g1_pfin_),
++                       g1::Stretch(q / 65536.0f), x3b_->x);
++    x3b_->Predict();
++    p = (float)x3b_->p;
++  }
+   unsigned int q2 = (unsigned int)(1.0f + 65534.0f * p);
+   if (q2 < 1) q2 = 1;
+   if (q2 > 65535) q2 = 65535;
+@@ -931,7 +942,7 @@
+     }
+     return;
+   }
+-  if (g1_active_) g1_->Update(bit);  // [G1]
++  if (g1_active_) { g1_->Update(bit); if (x3b_) x3b_->Update(bit); }  // [G1] [X3b]
+   if (e12_) e12_->Update(bit);  // [E12]
+   if (x2_) x2_->Update(bit);  // [X2]
+   if (t1_) t1_->Update(bit);  // [T1]
+--- a/src/predictor.h
++++ b/src/predictor.h
+@@ -20,6 +20,7 @@
+ #include "models/x2_timelaw.h"
+ #include "models/t1_fieldcopy.h"
+ #include "models/g1_gln.h"
++#include "models/x3b_ekf.h"
+ #include "mixer/lstm.h"
+ #include "contexts/context-hash.h"
+ #include "contexts/bracket-context.h"
+@@ -257,6 +258,7 @@
+   // T1 interlanguage title = English title (final stage after X2); on with E12/X2 (a dictionary is in use).
+   std::unique_ptr<t1::FieldCopyMix> t1_;
+   std::unique_ptr<g1::Gln> g1_;  // [G1]
++  std::unique_ptr<x3b::Ekf> x3b_;  // [X3b] EKF combiner after G1
+   bool g1_active_ = false;
+   float g1_psse_ = 0;
+   float g1_pfin_ = 0.5f;  // [C4]
